@@ -176,6 +176,10 @@ RETAIL_MARKUP = {
     "others": 1.3,
 }
 
+# Categories that are actually traded in wholesale mandis (AGMARKNET)
+# Dairy, eggs/meat, FMCG, and processed oils are NOT sold in mandis
+MANDI_CATEGORIES = {"vegetables", "fruits", "grains", "pulses", "spices"}
+
 # Product → category for markup calculation
 PRODUCT_CATEGORY = {
     "tomato": "vegetables", "onion": "vegetables", "potato": "vegetables",
@@ -211,48 +215,55 @@ import re
 def resolve_product_id(query: str) -> str | None:
     """Resolve a user query (English/Hindi) to an internal product ID.
     
-    Uses word-boundary matching to avoid false positives like
-    'rice' matching inside 'price'.
+    Uses exact string matching and robust substring matching for Hindi/English to avoid regex bugs.
     """
     q = query.lower().strip()
 
-    # Direct exact match (single-word query)
+    # Direct exact match
     if q in PRODUCT_TO_COMMODITY:
         return q
     if q in HINDI_ALIASES:
         return HINDI_ALIASES[q]
 
-    # Tokenize the query into words for word-boundary matching
-    words = set(re.findall(r'[\w]+', q))
-
-    # Priority 1: Check product IDs as whole words in the query
-    # Sort by length descending so longer matches win (e.g. 'green_chilli' > 'chilli')
+    # Priority 1: Check if English product IDs exist as whole words in the query
+    words = q.split()
     best_match = None
     best_len = 0
     for pid in PRODUCT_TO_COMMODITY:
-        # Handle multi-word product IDs (e.g. 'green_chilli' → check 'green chilli')
-        pid_words = set(pid.replace('_', ' ').split())
-        if pid_words.issubset(words) and len(pid) > best_len:
+        pid_clean = pid.replace('_', ' ')
+        # Boundary matching without regex \w which can fail on Devanagari
+        if f" {pid_clean} " in f" {q} " and len(pid) > best_len:
             best_match = pid
             best_len = len(pid)
 
     if best_match:
         return best_match
 
-    # Priority 2: Check Hindi aliases as whole words
+    # Priority 2: Check Hindi/English aliases
     for alias, pid in HINDI_ALIASES.items():
-        alias_words = set(re.findall(r'[\w]+', alias.lower()))
-        if alias_words.issubset(words):
+        if f" {alias} " in f" {q} ":
             return pid
 
-    # Priority 3: Word-boundary regex match for product IDs in longer text
-    for pid in sorted(PRODUCT_TO_COMMODITY.keys(), key=len, reverse=True):
-        # Only match whole words, not substrings
-        pattern = r'\b' + re.escape(pid.replace('_', ' ')) + r'\b'
-        if re.search(pattern, q):
+    # Priority 3: Fallback loose substring match for aliases (if no spaces were used)
+    for alias, pid in sorted(HINDI_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+        if alias in q:
             return pid
 
     return None
+
+
+def get_hindi_name(product_id: str) -> str:
+    """Get the primary Hindi (Devanagari) alias for a product ID."""
+    if not product_id:
+        return ""
+        
+    aliases = [alias for alias, pid in HINDI_ALIASES.items() if pid == product_id]
+    # Prefer Devanagari script aliases over romanized ones
+    for alias in aliases:
+        if any(ord(c) > 127 for c in alias):
+            return alias
+            
+    return aliases[0] if aliases else product_id
 
 
 def get_commodity_name(product_id: str) -> str | None:
@@ -264,6 +275,16 @@ def get_retail_markup(product_id: str) -> float:
     """Get the retail markup factor for a product category."""
     category = PRODUCT_CATEGORY.get(product_id, "others")
     return RETAIL_MARKUP.get(category, 1.3)
+
+
+def is_mandi_product(product_id: str) -> bool:
+    """Check if a product is traded in wholesale mandis (AGMARKNET).
+    
+    Returns False for dairy (paneer, ghee, butter), eggs/meat, FMCG,
+    and processed oils — these are NOT sold in mandis.
+    """
+    category = PRODUCT_CATEGORY.get(product_id, "others")
+    return category in MANDI_CATEGORIES
 
 
 def get_online_markup(product_id: str) -> dict:

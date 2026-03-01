@@ -28,8 +28,8 @@ const features = [
   },
   {
     icon: "🗣️",
-    title: "Hindi & Regional Languages",
-    desc: "Ask in Hindi, English, Tamil, Telugu, or Marathi. BharatPrice AI understands you in your language.",
+    title: "Hindi & English Support",
+    desc: "Ask in Hindi or English. BharatPrice AI understands you in your language and responds naturally.",
   },
 ];
 
@@ -47,8 +47,8 @@ export default function Home() {
         </h1>
         <p>
           AI-powered pricing intelligence that helps 12 million+ kirana store
-          owners set optimal prices, track competitors, and forecast demand — all
-          in Hindi and regional languages.
+          owners set optimal prices, track competitors, and forecast demand — in
+          Hindi and English.
         </p>
         <div className="hero-cta">
           <Link href="/chat" className="btn-primary">
@@ -66,15 +66,15 @@ export default function Home() {
             <div className="stat-label">Products Tracked</div>
           </div>
           <div className="stat-item">
-            <div className="stat-value">8</div>
-            <div className="stat-label">Major Cities</div>
+            <div className="stat-value">All India</div>
+            <div className="stat-label">Pincode Coverage</div>
           </div>
           <div className="stat-item">
-            <div className="stat-value">24+</div>
-            <div className="stat-label">Mandis Covered</div>
+            <div className="stat-value">Live</div>
+            <div className="stat-label">Mandi Rates</div>
           </div>
           <div className="stat-item">
-            <div className="stat-value">5</div>
+            <div className="stat-value">2</div>
             <div className="stat-label">Languages</div>
           </div>
         </div>
@@ -122,7 +122,7 @@ export default function Home() {
       <footer className="footer">
         <p>
           Built with ❤️ for India — AI for Bharat Hackathon 2026 |{" "}
-          Powered by AWS Bedrock & Indian Market Data
+          Powered by AWS &amp; Indian Market Data
         </p>
       </footer>
     </>

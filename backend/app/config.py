@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
-    # data.gov.in API (AGMARKNET real mandi prices)
-    data_gov_api_key: str = "579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b"
+    # data.gov.in API (AGMARKNET real mandi prices) — key must be in .env
+    data_gov_api_key: str = ""
 
     # Feature flags
     use_local_data: bool = True  # Use seed data instead of DynamoDB (for dev)

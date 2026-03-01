@@ -136,12 +136,15 @@ def _seasonal_factor(date: datetime) -> float:
 
 def generate_price_record(product_id: str, region_id: str, date: datetime) -> dict:
     """Generate a single price record for a product in a region on a date."""
+    from app.data.product_mapping import is_mandi_product
+    
     product = PRODUCTS[product_id]
     region = REGIONS[region_id]
 
     base = product["base_price"] * region["price_factor"] * _seasonal_factor(date)
 
-    mandi_price = _add_noise(base * 0.7, 0.10)  # Mandi is ~30% cheaper
+    has_mandi = is_mandi_product(product_id)
+    mandi_price = _add_noise(base * 0.7, 0.10) if has_mandi else 0  # Only mandi-traded items
     bigbasket_price = _add_noise(base * 1.08, 0.05)  # Online slightly higher
     jiomart_price = _add_noise(base * 1.05, 0.05)
     local_avg = _add_noise(base, 0.06)

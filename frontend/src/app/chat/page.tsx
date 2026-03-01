@@ -98,6 +98,9 @@ _शुरू करने के लिए नीचे दिए गए सु
 const LANG_STORAGE_KEY = "bharatprice-language";
 const REGION_STORAGE_KEY = "bharatprice-region";
 const PINCODE_STORAGE_KEY = "bharatprice-pincode";
+const STATE_STORAGE_KEY = "bharatprice-state";
+const DISTRICT_STORAGE_KEY = "bharatprice-district";
+const CITY_NAME_STORAGE_KEY = "bharatprice-custom-city";
 
 // Rough geo-coordinates to city mapping for geolocation
 const CITY_COORDS: { id: string; lat: number; lon: number }[] = [
@@ -130,7 +133,10 @@ export default function ChatPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [language, setLanguage] = useState("en");
     const [region, setRegion] = useState("");
+    const [customCityName, setCustomCityName] = useState(""); // Track exact city from API
     const [pincode, setPincode] = useState("");
+    const [locationState, setLocationState] = useState("");
+    const [locationDistrict, setLocationDistrict] = useState("");
     const [pincodeInput, setPincodeInput] = useState("");
     const [showRegionPicker, setShowRegionPicker] = useState(false);
     const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -143,6 +149,7 @@ export default function ChatPage() {
 
     const getContent = (lang: string) => CONTENT[lang] || CONTENT.en;
     const getCityName = (regionId: string, lang: string) => {
+        if (customCityName) return customCityName;
         const city = CITIES.find(c => c.id === regionId);
         if (!city) return "Delhi";
         return lang === "hi" ? city.nameHi : city.name;
@@ -156,7 +163,13 @@ export default function ChatPage() {
         const savedLang = localStorage.getItem(LANG_STORAGE_KEY) || "en";
         const savedRegion = localStorage.getItem(REGION_STORAGE_KEY);
         const savedPincode = localStorage.getItem(PINCODE_STORAGE_KEY);
+        const savedState = localStorage.getItem(STATE_STORAGE_KEY);
+        const savedDistrict = localStorage.getItem(DISTRICT_STORAGE_KEY);
+        const savedCustomCity = localStorage.getItem(CITY_NAME_STORAGE_KEY);
         setLanguage(savedLang);
+
+        if (savedState) setLocationState(savedState);
+        if (savedDistrict) setLocationDistrict(savedDistrict);
 
         if (savedPincode) {
             setPincode(savedPincode);
@@ -166,10 +179,13 @@ export default function ChatPage() {
         if (savedRegion) {
             // Region was already selected previously
             setRegion(savedRegion);
+            if (savedCustomCity) setCustomCityName(savedCustomCity);
+
             const c = getContent(savedLang);
+            const cityName = savedCustomCity || getCityName(savedRegion, savedLang);
             const displayName = savedPincode
-                ? `${getCityName(savedRegion, savedLang)} (📌 ${savedPincode})`
-                : getCityName(savedRegion, savedLang);
+                ? `${cityName} (📌 ${savedPincode})`
+                : cityName;
             setMessages([{
                 id: "welcome", sender: "bot", timestamp: new Date(),
                 text: c.welcome(displayName),
@@ -184,26 +200,105 @@ export default function ChatPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const selectRegion = (regionId: string) => {
-        setRegion(regionId);
-        localStorage.setItem(REGION_STORAGE_KEY, regionId);
-
-        // Save pincode if provided
+    const selectRegion = async (regionId: string) => {
+        // Save pincode
         const pc = pincodeInput.trim();
         if (pc && /^\d{6}$/.test(pc)) {
             setPincode(pc);
             localStorage.setItem(PINCODE_STORAGE_KEY, pc);
+
+            // Use India Post API for accurate Indian pincode → city resolution
+            try {
+                const postResp = await fetch(`https://api.postalpincode.in/pincode/${pc}`);
+                if (postResp.ok) {
+                    const postData = await postResp.json();
+                    if (postData?.[0]?.Status === "Success" && postData[0].PostOffice?.length > 0) {
+                        // Pick the Head Post Office or first entry
+                        const hpo = postData[0].PostOffice.find((po: any) => po.BranchType === "Head Post Office")
+                            || postData[0].PostOffice[0];
+                        const cityName = hpo.Block !== "NA" ? hpo.Block : (hpo.Name || hpo.Division || "");
+                        const dist = hpo.District || "";
+                        const st = hpo.State || "";
+
+                        if (st) {
+                            setLocationState(st);
+                            localStorage.setItem(STATE_STORAGE_KEY, st);
+                        }
+                        if (dist) {
+                            setLocationDistrict(dist);
+                            localStorage.setItem(DISTRICT_STORAGE_KEY, dist);
+                        }
+                        if (cityName) {
+                            setCustomCityName(cityName);
+                            localStorage.setItem(CITY_NAME_STORAGE_KEY, cityName);
+                        }
+
+                        const resolvedRegion = cityName || regionId;
+                        setRegion(resolvedRegion);
+                        localStorage.setItem(REGION_STORAGE_KEY, resolvedRegion);
+
+                        setShowRegionPicker(false);
+                        const c = getContent(language);
+                        const displayName = `${cityName} (📌 ${pc})`;
+                        setMessages([{
+                            id: "welcome", sender: "bot", timestamp: new Date(),
+                            text: c.welcome(displayName),
+                        }]);
+                        setSuggestions(c.suggestions);
+                        return; // Done!
+                    }
+                }
+            } catch (e) {
+                console.error("India Post API failed, falling back to Nominatim", e);
+            }
+
+            // Fallback: Nominatim reverse geocode
+            try {
+                const searchResp = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${pc}&country=india&format=json&limit=1`);
+                if (searchResp.ok) {
+                    const searchData = await searchResp.json();
+                    if (searchData?.length > 0) {
+                        const revResp = await fetch(
+                            `https://nominatim.openstreetmap.org/reverse?lat=${searchData[0].lat}&lon=${searchData[0].lon}&format=json&zoom=14&addressdetails=1`,
+                            { headers: { "Accept-Language": "en" } }
+                        );
+                        if (revResp.ok) {
+                            const revData = await revResp.json();
+                            const addr = revData?.address;
+                            const st = addr?.state || "";
+                            const dist = addr?.state_district || "";
+                            const cityName = addr?.city || addr?.town || addr?.county || dist || "";
+
+                            if (st) { setLocationState(st); localStorage.setItem(STATE_STORAGE_KEY, st); }
+                            if (dist) { setLocationDistrict(dist); localStorage.setItem(DISTRICT_STORAGE_KEY, dist); }
+                            if (cityName) { setCustomCityName(cityName); localStorage.setItem(CITY_NAME_STORAGE_KEY, cityName); }
+
+                            const resolvedRegion = cityName || regionId;
+                            setRegion(resolvedRegion);
+                            localStorage.setItem(REGION_STORAGE_KEY, resolvedRegion);
+
+                            setShowRegionPicker(false);
+                            const c = getContent(language);
+                            setMessages([{ id: "welcome", sender: "bot", timestamp: new Date(), text: c.welcome(`${cityName} (📌 ${pc})`) }]);
+                            setSuggestions(c.suggestions);
+                            return;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Nominatim fallback also failed", e);
+            }
         }
 
+        // Fallback if Nominatim failed
+        setRegion(regionId);
+        localStorage.setItem(REGION_STORAGE_KEY, regionId);
         setShowRegionPicker(false);
 
         const c = getContent(language);
-        const displayName = pc && /^\d{6}$/.test(pc)
-            ? `${getCityName(regionId, language)} (📌 ${pc})`
-            : getCityName(regionId, language);
         setMessages([{
             id: "welcome", sender: "bot", timestamp: new Date(),
-            text: c.welcome(displayName),
+            text: c.welcome(getCityName(regionId, language)),
         }]);
         setSuggestions(c.suggestions);
     };
@@ -219,8 +314,9 @@ export default function ChatPage() {
                 // First: set nearest city from coords (instant)
                 const nearest = findNearestCity(pos.coords.latitude, pos.coords.longitude);
                 setRegion(nearest);
+                localStorage.setItem(REGION_STORAGE_KEY, nearest);
 
-                // Then: try to reverse geocode for pincode
+                // Then: try to reverse geocode for exact city and pincode
                 try {
                     const resp = await fetch(
                         `https://nominatim.openstreetmap.org/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&format=json&zoom=18&addressdetails=1`,
@@ -228,14 +324,51 @@ export default function ChatPage() {
                     );
                     if (resp.ok) {
                         const data = await resp.json();
+
+                        // Extract exact city/town name
+                        const exactCity = data?.address?.city || data?.address?.town || data?.address?.county || "";
+                        if (exactCity) {
+                            setCustomCityName(exactCity);
+                            localStorage.setItem(CITY_NAME_STORAGE_KEY, exactCity);
+                        } else {
+                            localStorage.removeItem(CITY_NAME_STORAGE_KEY);
+                        }
+
+                        // Extract Pincode
                         const pc = data?.address?.postcode;
                         if (pc && /^\d{6}$/.test(pc)) {
                             setPincode(pc);
                             setPincodeInput(pc);
+                            localStorage.setItem(PINCODE_STORAGE_KEY, pc);
                         }
+
+                        // Extract State and District
+                        const st = data?.address?.state || "";
+                        const dist = data?.address?.state_district || "";
+                        if (st) {
+                            setLocationState(st);
+                            localStorage.setItem(STATE_STORAGE_KEY, st);
+                        }
+                        if (dist) {
+                            setLocationDistrict(dist);
+                            localStorage.setItem(DISTRICT_STORAGE_KEY, dist);
+                        }
+
+                        // Show welcome message with new fetched exact data
+                        setShowRegionPicker(false);
+                        const c = getContent(language);
+                        const displayName = pc && /^\d{6}$/.test(pc)
+                            ? `${exactCity || getCityName(nearest, language)} (📌 ${pc})`
+                            : exactCity || getCityName(nearest, language);
+                        setMessages([{
+                            id: "welcome", sender: "bot", timestamp: new Date(),
+                            text: c.welcome(displayName),
+                        }]);
+                        setSuggestions(c.suggestions);
                     }
                 } catch {
                     // Reverse geocoding failed — just use nearest city
+                    setShowRegionPicker(false);
                 }
 
                 setIsDetecting(false);
@@ -284,12 +417,16 @@ export default function ChatPage() {
         setSuggestions([]);
 
         try {
-            const response: ChatResponse = await sendChat({
+            const payload = {
                 message: messageText,
                 language: language,
-                region: region,
+                region: customCityName || region,
                 pincode: pincode || undefined,
-            });
+                state: locationState || undefined,
+                district: locationDistrict || undefined,
+            };
+            console.log("SENDING TO BACKEND:", JSON.stringify(payload));
+            const response: ChatResponse = await sendChat(payload);
 
             const botMsg: Message = {
                 id: `bot_${Date.now()}`,
@@ -420,34 +557,16 @@ export default function ChatPage() {
                         </button>
 
                         <div className="region-divider">
-                            <span>{language === "hi" ? "या शहर चुनें" : "or select a city"}</span>
+                            <span>{language === "hi" ? "या पिनकोड डालें" : "or enter your Pincode"}</span>
                         </div>
 
-                        <div className="city-grid">
-                            {CITIES.map((city) => (
-                                <button
-                                    key={city.id}
-                                    className={`city-card ${region === city.id ? "selected" : ""}`}
-                                    onClick={() => setRegion(city.id)}
-                                >
-                                    <span className="city-icon">{city.icon}</span>
-                                    <span className="city-name">
-                                        {language === "hi" ? city.nameHi : city.name}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Pincode input */}
+                        {/* Pincode input — mandatory */}
                         <div className="pincode-section">
-                            <div className="region-divider">
-                                <span>{language === "hi" ? "पिनकोड डालें (वैकल्पिक)" : "Enter Pincode (optional)"}</span>
-                            </div>
                             <div className="pincode-input-row">
                                 <input
                                     type="text"
                                     className="pincode-input"
-                                    placeholder={language === "hi" ? "जैसे 110001" : "e.g. 110001"}
+                                    placeholder={language === "hi" ? "जैसे 734001" : "e.g. 734001"}
                                     value={pincodeInput}
                                     onChange={(e) => {
                                         const val = e.target.value.replace(/\D/g, "").slice(0, 6);
@@ -466,10 +585,10 @@ export default function ChatPage() {
                             </p>
                         </div>
 
-                        {region && (
+                        {pincodeInput.length === 6 && (
                             <button
                                 className="btn-primary region-continue-btn"
-                                onClick={() => selectRegion(region)}
+                                onClick={() => selectRegion("custom")}
                             >
                                 {content.continueBtn}
                             </button>

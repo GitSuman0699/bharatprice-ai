@@ -13,17 +13,17 @@ from app.services.database import (
     search_products,
 )
 from app.data.seed_data import find_product_id as find_pid, REGIONS
-from app.data.pincode_data import lookup_pincode, get_city_name
-from app.data.product_mapping import resolve_product_id
+from app.data.product_mapping import resolve_product_id, get_hindi_name, is_mandi_product
 
 logger = logging.getLogger(__name__)
 
-# Try to import groq
-try:
-    from groq import Groq
-    GROQ_AVAILABLE = True
-except ImportError:
-    GROQ_AVAILABLE = False
+from dotenv import load_dotenv
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
+load_dotenv()
+
+BEDROCK_AVAILABLE = True
 
 
 # ─── Intent Classification ─────────────────────────────────────────
@@ -102,37 +102,48 @@ def extract_region(message: str) -> str:
 
 # ─── Data Context Fetchers ──────────────────────────────────────────
 
-def _fetch_price_context(product_query: str, region: str, pincode: str | None = None) -> dict:
-    price_data = get_current_price(product_query, region, pincode=pincode)
+def _fetch_price_context(product_query: str, region: str, pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict:
+    price_data = get_current_price(product_query, region, pincode=pincode, state=state, district=district)
     if not price_data:
         return {"error": f"No pricing data found for {product_query}"}
     
     city = price_data.region if pincode else REGIONS.get(region, {}).get("city", "your area")
     source_badge = "Real-time data from data.gov.in (AGMARKNET)" if pincode else "Estimated data"
 
-    return {
+    # Resolve product ID to check if it's mandi-eligible
+    product_id = resolve_product_id(product_query)
+    has_mandi = product_id and is_mandi_product(product_id)
+
+    context = {
         "context_type": "current_price",
         "product": price_data.product_name,
         "location": city,
-        "mandi_wholesale_price": price_data.mandi_price,
-        "bigbasket_scraped_price": price_data.bigbasket_price,
+        "bigbasket_estimated_price": price_data.bigbasket_price,
         "jiomart_estimated_price": price_data.jiomart_price,
         "local_market_average": price_data.local_avg,
         "recommended_selling_price": price_data.recommended_retail,
         "unit": price_data.unit,
         "demand_trend": price_data.demand_trend,
         "data_source": source_badge,
-        "profit_margin_tip": f"Buying at mandi rate ({price_data.mandi_price}) and selling at {price_data.recommended_retail} gives ~{((price_data.recommended_retail - price_data.mandi_price) / price_data.mandi_price * 100):.0f}% margin."
     }
 
-def _fetch_comparison_context(product_query: str, region: str, pincode: str | None = None) -> dict:
-    comparison = get_competitor_prices(product_query, region, pincode=pincode)
+    # Only include mandi data for products actually traded in mandis
+    if has_mandi and price_data.mandi_price > 0:
+        context["mandi_wholesale_price"] = price_data.mandi_price
+        context["profit_margin_tip"] = f"Buying at mandi rate ({price_data.mandi_price}) and selling at {price_data.recommended_retail} gives ~{((price_data.recommended_retail - price_data.mandi_price) / price_data.mandi_price * 100):.0f}% margin."
+    else:
+        context["note"] = "This product is not traded in wholesale mandis. Prices are from retail/online sources."
+
+    return context
+
+def _fetch_comparison_context(product_query: str, region: str, pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict:
+    comparison = get_competitor_prices(product_query, region, pincode=pincode, state=state, district=district)
     if not comparison:
         return {"error": f"No comparison data for {product_query}"}
     return {"context_type": "competitor_comparison", "data": comparison}
 
-def _fetch_mandi_context(product_query: str, region: str, pincode: str | None = None) -> dict:
-    rates = get_mandi_rates(product_query, region, pincode=pincode)
+def _fetch_mandi_context(product_query: str, region: str, pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict:
+    rates = get_mandi_rates(product_query, region, pincode=pincode, state=state, district=district)
     if not rates:
         return {"error": f"No mandi rates for {product_query}"}
     
@@ -152,8 +163,8 @@ def _fetch_trend_context(product_query: str, region: str) -> dict:
         "analysis": trend.summary
     }
 
-def _fetch_forecast_context(product_query: str, region: str, pincode: str | None = None) -> dict:
-    price_data = get_current_price(product_query, region, pincode=pincode)
+def _fetch_forecast_context(product_query: str, region: str, pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict:
+    price_data = get_current_price(product_query, region, pincode=pincode, state=state, district=district)
     if not price_data:
         return {"error": f"No forecast data for {product_query}"}
     return {
@@ -165,26 +176,27 @@ def _fetch_forecast_context(product_query: str, region: str, pincode: str | None
     }
 
 
-# ─── LLM Generation (Groq/Bedrock) ────────────────────────────────
+# ─── LLM Generation (Bedrock) ────────────────────────────────
 
-def _get_groq_client():
-    # Use environment variable or fallback to a provided key for the hackathon
-    api_key = os.environ.get("GROQ_API_KEY") 
-    if GROQ_AVAILABLE and api_key:
+def _get_bedrock_client():
+    if BEDROCK_AVAILABLE:
         try:
-            return Groq(api_key=api_key)
+            return boto3.client(
+                service_name='bedrock-runtime',
+                region_name="ap-south-1"
+            )
         except Exception as e:
-            logger.warning(f"Could not init Groq client: {e}")
+            logger.warning(f"Could not init Bedrock client: {e}")
     return None
 
 async def generate_ai_response(message: str, data_context: dict, language: str = "en") -> str:
-    """Generate a dynamic response using Groq (Llama 3) based on the scraped data context."""
+    """Generate a dynamic response using Amazon Bedrock (Claude 3 Haiku) based on the scraped data context."""
     
     # If no data found, return standard fallback early
     if "error" in data_context:
         return f"I'm sorry, I couldn't find exact pricing data for that. Please try asking about common staples like Tomato, Onion, Potato, Atta, or Rice."
 
-    client = _get_groq_client()
+    client = _get_bedrock_client()
     if not client:
         # Fallback to a static string if no LLM is available
         logger.error("LLM Client not available. Falling back to simple string dump.")
@@ -198,6 +210,12 @@ async def generate_ai_response(message: str, data_context: dict, language: str =
         "mr": "Respond in Marathi (Devanagari script).",
     }.get(language, "Respond in English.")
 
+    disclaimers = {
+        "hi": "⚠️ **अस्वीकरण:** **भारतप्राइस एआई बाजार के उतार-चढ़ाव के कारण गलतियां कर सकता है। कीमतें data.gov.in (AGMARKNET) और ऑनलाइन बाजारों से ली गई हैं।**",
+        "en": "⚠️ **Disclaimer:** **BharatPrice AI can make mistakes due to fluctuating market conditions and data delays. Prices are aggregated from sources like data.gov.in (AGMARKNET) and online marketplaces.**"
+    }
+    disclaimer_text = disclaimers.get(language, disclaimers["en"])
+
     prompt = f"""You are BharatPrice AI, a highly intelligent pricing assistant for Indian Kirana (grocery) store owners.
 Your job is to answer the user's specific question using the provided real-time market data context.
 
@@ -208,7 +226,12 @@ CRITICAL INSTRUCTIONS:
 4. Provide the 'Profit Margin Tip' if available.
 5. Embellish your response with proper formatting (bolding, bullet points) and relevant emojis to make it easy to read on a mobile phone.
 6. Use the symbol ₹ for all currency values.
-7. AT THE VERY END of your response, you MUST append the 'data_source' string from the context wrapped in italics, like: *📡 Real-time data from data.gov.in (AGMARKNET)*
+7. AT THE VERY END of your response, you MUST append this exact markdown text with empty lines before and after it:
+   
+   ---
+   
+   > {disclaimer_text}
+
 
 REAL-TIME MARKET DATA CONTEXT (Use this to answer):
 {json.dumps(data_context, indent=2)}
@@ -218,26 +241,49 @@ USER QUESTION:
 """
 
     try:
-        completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are BharatPrice AI, the ultimate data-driven pricing assistant for Kirana stores."
-                },
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 512,
+            "temperature": 0.3,
+            "system": "You are BharatPrice AI, the ultimate data-driven pricing assistant for Kirana stores.",
+            "messages": [
                 {
                     "role": "user",
                     "content": prompt
                 }
-            ],
-            model="llama-3.1-8b-instant",
-            temperature=0.3, # Keep it factual
-            max_tokens=512,
+            ]
+        })
+        
+        response = client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=body
         )
-        return completion.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Groq API call failed: {e}")
-        print(f"DEBUG GROQ EXCEPTION: {e}")
-        return f"Sorry, I encountered an AI generation error. Status/Exception: {e}. Raw data: {json.dumps(data_context)}"
+        
+        response_body = json.loads(response.get("body").read())
+        return response_body.get("content")[0].get("text")
+        
+    except (ClientError, BotoCoreError) as e:
+        logger.error(f"Bedrock Claude call failed: {e}. Trying fallback model...")
+        
+        # Fallback to Amazon Titan if Claude access is not yet approved
+        try:
+            fallback_body = json.dumps({
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "maxTokenCount": 512,
+                    "temperature": 0.3,
+                }
+            })
+            fallback_response = client.invoke_model(
+                modelId="amazon.titan-text-lite-v1",
+                body=fallback_body
+            )
+            fallback_body_res = json.loads(fallback_response.get("body").read())
+            return fallback_body_res.get("results")[0].get("outputText")
+            
+        except (ClientError, BotoCoreError) as fallback_e:
+            logger.error(f"Bedrock Titan Fallback failed: {fallback_e}")
+            return f"Model access pending. Please approve Amazon Titan or Anthropic Claude in AWS Console. Status: {e}"
 
 
 # ─── Main Chat Handler ─────────────────────────────────────────────
@@ -248,6 +294,8 @@ async def process_message(
     language: str = "en",
     region: str = "delhi",
     pincode: str | None = None,
+    state: str | None = None,
+    district: str | None = None,
 ) -> dict:
     """Process a user message, fetch context, and generate an AI response."""
 
@@ -255,14 +303,16 @@ async def process_message(
     product_id = extract_product(message)
     product_name = product_id or message 
 
-    if region and region in REGIONS:
+    # When GPS data (state/district) is available, use the frontend's region directly (e.g. "Siliguri")
+    if state and district and region:
+        resolved_region = region
+    elif region and region in REGIONS:
         resolved_region = region
     else:
         resolved_region = extract_region(message)
 
-    if pincode:
-        location = lookup_pincode(pincode)
-        logger.info(f"Processing with pincode {pincode} → {location['city']}, {location['state']}")
+    if state and district:
+        logger.info(f"Processing with GPS State: {state}, District: {district}, Pincode: {pincode}")
 
     data_context = {}
     suggestions = []
@@ -289,16 +339,16 @@ async def process_message(
         suggestions = ["Price of atta", "Tomato price trend", "Compare paneer prices"]
 
     elif intent == "price_check":
-        data_context = _fetch_price_context(product_name, resolved_region, pincode=pincode)
+        data_context = _fetch_price_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
         suggestions = [f"Compare {product_name} prices", f"Mandi rates for {product_name}", f"Price trend of {product_name}"]
 
     elif intent == "compare":
-        data_context = _fetch_comparison_context(product_name, resolved_region, pincode=pincode)
+        data_context = _fetch_comparison_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
         data_context["data_source"] = "BigBasket Scraper + Mandi Data"
         suggestions = [f"Mandi rates for {product_name}", f"Price trend of {product_name}"]
 
     elif intent == "mandi":
-        data_context = _fetch_mandi_context(product_name, resolved_region, pincode=pincode)
+        data_context = _fetch_mandi_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
         data_context["data_source"] = "data.gov.in (AGMARKNET)"
         suggestions = [f"Price of {product_name}", f"Compare {product_name} prices"]
 
@@ -308,13 +358,32 @@ async def process_message(
         suggestions = [f"Price of {product_name}", f"Demand forecast for {product_name}"]
 
     elif intent == "forecast":
-        data_context = _fetch_forecast_context(product_name, resolved_region, pincode=pincode)
+        data_context = _fetch_forecast_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
         data_context["data_source"] = "BharatPrice ML Predictions"
         suggestions = [f"Price of {product_name}", f"Mandi rates for {product_name}"]
 
     else:
         data_context = {"context_type": "unknown_query", "instruction": "Politely inform the user you are a Kirana pricing assistant and ask them to specify a grocery product.", "data_source": "BharatPrice AI"}
         suggestions = ["Price of atta", "Compare tomato prices", "Show mandi rates"]
+
+    # Translate suggestions if language is Hindi
+    if language == "hi":
+        hi_name = get_hindi_name(product_id) if product_id else product_name
+        hi_suggestions = {
+            "Aaj atta ka rate kya hai?": "आज आटा का रेट क्या है?",
+            "Compare tomato prices": "टमाटर की कीमत की तुलना करें",
+            "Show mandi rates for onion": "प्याज का मंडी रेट दिखाएं",
+            "Price of atta": "आटा की कीमत",
+            "Tomato price trend": "टमाटर का प्राइस ट्रेंड",
+            "Compare paneer prices": "पनीर की कीमत की तुलना करें",
+            f"Compare {product_name} prices": f"{hi_name} की कीमत की तुलना करें",
+            f"Mandi rates for {product_name}": f"{hi_name} का मंडी रेट",
+            f"Price trend of {product_name}": f"{hi_name} का प्राइस ट्रेंड",
+            f"Price of {product_name}": f"{hi_name} की कीमत",
+            f"Demand forecast for {product_name}": f"{hi_name} की डिमांड फोरकास्ट",
+            "Show mandi rates": "मंडी रेट दिखाएं",
+        }
+        suggestions = [hi_suggestions.get(s, s) for s in suggestions]
 
     # Generate the final natural language response using the LLM
     final_reply = await generate_ai_response(message, data_context, language)

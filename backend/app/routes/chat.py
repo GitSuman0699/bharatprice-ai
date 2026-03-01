@@ -16,6 +16,8 @@ async def chat(request: ChatRequest):
         language=request.language.value,
         region=request.region,
         pincode=request.pincode,
+        state=request.state,
+        district=request.district,
     )
 
     return ChatResponse(

@@ -8,6 +8,7 @@ Falls back to estimated retail prices from wholesale data when scraping fails.
 """
 
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Optional
@@ -21,15 +22,13 @@ from app.data.product_mapping import (
     get_online_markup,
     PRODUCT_TO_COMMODITY,
 )
-from app.data.pincode_data import lookup_pincode
-
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ─────────────────────────────────────────────────
 
 DATA_GOV_API_URL = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
 # Public demo API key — works for prototype; replace with registered key for production
-DATA_GOV_API_KEY = "579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b"
+DATA_GOV_API_KEY = os.getenv("DATA_GOV_API_KEY")
 
 BIGBASKET_SEARCH_URL = "https://www.bigbasket.com/listing-svc/v2/products"
 
@@ -63,7 +62,7 @@ def fetch_mandi_prices(
     commodity: str,
     state: str = "",
     district: str = "",
-    limit: int = 20,
+    limit: int = 1,
 ) -> list[dict]:
     """
     Fetch real daily mandi prices from data.gov.in AGMARKNET API.
@@ -98,7 +97,7 @@ def fetch_mandi_prices(
         params["filters[district]"] = district
 
     try:
-        with httpx.Client(timeout=10) as client:
+        with httpx.Client(timeout=25) as client:
             response = client.get(DATA_GOV_API_URL, params=params)
             response.raise_for_status()
             data = response.json()
@@ -163,9 +162,12 @@ def scrape_bigbasket_price(product_id: str) -> dict | None:
 def get_real_price(
     query: str,
     pincode: str = "110001",
+    state: str | None = None,
+    district: str | None = None,
+    city: str | None = None,
 ) -> dict | None:
     """
-    Get real prices for a product at a specific pincode.
+    Get real prices for a product using GPS-provided state/district.
     Combines data.gov.in mandi prices with scraped retail prices.
 
     Returns:
@@ -191,11 +193,10 @@ def get_real_price(
         logger.warning(f"No commodity mapping for: {product_id}")
         return None
 
-    # Step 2: Resolve pincode → state, district
-    location = lookup_pincode(pincode)
-    state = location["state"]
-    district = location["district"]
-    city = location["city"]
+    # Step 2: Use GPS-provided state, district, city (from frontend Nominatim)
+    state = state or "Delhi"
+    district = district or "New Delhi"
+    city = city or district
 
     # Step 3: Fetch real mandi prices from data.gov.in
     mandi_records = fetch_mandi_prices(commodity, state=state)
@@ -259,10 +260,22 @@ def get_real_price(
         jiomart_price = round(base_mandi * online_markup["jiomart"], 2)
         local_avg = round(base_mandi * markup, 2)
 
+    # Sanity check: Retail prices cannot physically be lower than Mandi wholesale
+    # (This happens when scrapers accidentally pull a 250g pack price)
+    if bigbasket_price <= base_mandi:
+        bigbasket_price = round(base_mandi * online_markup["bigbasket"], 2)
+        jiomart_price = round(base_mandi * online_markup["jiomart"], 2)
+        local_avg = round(base_mandi * markup, 2)
+        data_source = data_source.replace(" + BigBasket (scraped)", " + Overridden Scatter")
+
     # Recommended retail: slightly above mandi, competitive with online
     recommended_retail = round(
         min(local_avg, bigbasket_price, jiomart_price) * 0.97, 2
     )
+
+    # Final safety clamp: Must guarantee a positive profit margin over wholesale
+    if recommended_retail <= base_mandi:
+        recommended_retail = round(base_mandi * 1.15, 2)
 
     # Determine demand trend from price range
     if mandi_max_per_kg and mandi_min_per_kg:
@@ -305,9 +318,11 @@ def get_real_mandi_rates(
     query: str,
     pincode: str = "110001",
     limit: int = 10,
+    state: str | None = None,
+    district: str | None = None,
 ) -> list[dict]:
     """
-    Get real mandi rates from multiple markets near a pincode.
+    Get real mandi rates from multiple markets using GPS params.
 
     Returns list of:
         {mandi_name, state, district, min_price, max_price, modal_price, arrival_date, unit}
@@ -319,9 +334,6 @@ def get_real_mandi_rates(
     commodity = get_commodity_name(product_id)
     if not commodity:
         return []
-
-    location = lookup_pincode(pincode)
-    state = location["state"]
 
     records = fetch_mandi_prices(commodity, state=state, limit=limit)
 
@@ -354,6 +366,3 @@ def get_real_mandi_rates(
     ]
 
 
-def get_available_commodities() -> list[str]:
-    """Return list of commodities we can fetch real data for."""
-    return sorted(set(PRODUCT_TO_COMMODITY.values()))

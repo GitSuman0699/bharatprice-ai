@@ -5,6 +5,7 @@ AI-powered hyperlocal pricing intelligence for India's kirana stores.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from mangum import Mangum
 from app.config import get_settings
 from app.routes import chat, data, user
 
@@ -46,3 +47,6 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+# AWS Lambda Handler
+handler = Mangum(app)

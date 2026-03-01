@@ -139,6 +139,12 @@ body {
   transition: all 0.2s;
 }
 
+.navbar-links a.btn-primary {
+  color: white;
+  border: 1px solid rgba(255, 143, 92, 0.4);
+  box-shadow: 0 0 16px rgba(255, 107, 44, 0.25);
+}
+
 .navbar-links a:hover {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
@@ -326,11 +332,11 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding-top: 72px;
+  padding-top: 0;
 }
 
-/* Hide "Try Demo" on the chat page — user is already in the demo */
-body.chat-active .navbar-links .btn-primary {
+/* Hide navbar entirely on the chat page — more screen space for chat */
+body.chat-active .navbar {
   display: none;
 }
 

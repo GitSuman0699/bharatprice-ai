@@ -4,7 +4,15 @@ Uses real data from data.gov.in API when available, falls back to seed data.
 """
 
 import logging
+import os
+import json
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import boto3
+from botocore.exceptions import ClientError
 
 from app.data.seed_data import (
     generate_price_record,
@@ -14,170 +22,251 @@ from app.data.seed_data import (
     REGIONS,
     get_product_list,
 )
-from app.data.pincode_data import lookup_pincode, get_city_name
 from app.models.schemas import PriceData, MandiRate, PriceTrend, UserProfile
 from app.services.price_fetcher import get_real_price, get_real_mandi_rates
+from app.data.product_mapping import is_mandi_product
 
 logger = logging.getLogger(__name__)
 
 
-# ─── In-memory user store (prototype) ─────────────────────────────
+# ─── DynamoDB Configuration ──────────────────────────────────────
 
-_users: dict[str, dict] = {}
+DYNAMODB_AVAILABLE = True
+try:
+    dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'ap-south-1'))
+    users_table = dynamodb.Table('BharatPriceUsers')
+    market_table = dynamodb.Table('BharatPriceMarketData')
+except Exception as e:
+    logger.error(f"Failed to initialize DynamoDB: {e}")
+    DYNAMODB_AVAILABLE = False
 
 
 # ─── User Operations ──────────────────────────────────────────────
 
-def create_user(user_id: str, profile: dict) -> UserProfile:
-    """Create a new user profile."""
-    _users[user_id] = {**profile, "user_id": user_id}
-    return UserProfile(**_users[user_id])
+def create_user(user_id: str, profile: dict) -> UserProfile | None:
+    """Create a new user profile in DynamoDB."""
+    if not DYNAMODB_AVAILABLE:
+        logger.error("DynamoDB not available.")
+        return None
 
+    item = {**profile, "user_id": user_id}
+    try:
+        users_table.put_item(Item=item)
+        return UserProfile(**item)
+    except ClientError as e:
+        logger.error(f"Error creating user in DynamoDB: {e}")
+        return None
 
 def get_user(user_id: str) -> UserProfile | None:
-    """Get user profile by ID."""
-    if user_id in _users:
-        return UserProfile(**_users[user_id])
-    return None
+    """Get user profile by ID from DynamoDB."""
+    if not DYNAMODB_AVAILABLE:
+        return None
 
+    try:
+        response = users_table.get_item(Key={'user_id': user_id})
+        item = response.get('Item')
+        if item:
+            return UserProfile(**item)
+        return None
+    except ClientError as e:
+        logger.error(f"Error getting user from DynamoDB: {e}")
+        return None
 
 def update_user(user_id: str, updates: dict) -> UserProfile | None:
-    """Update user profile."""
-    if user_id in _users:
-        _users[user_id].update(updates)
-        return UserProfile(**_users[user_id])
-    return None
+    """Update user profile in DynamoDB."""
+    if not DYNAMODB_AVAILABLE:
+        return None
+
+    try:
+        # Construct update expression
+        update_expr = "set "
+        expr_attr_values = {}
+        expr_attr_names = {}
+        
+        for k, v in updates.items():
+            update_expr += f"#{k} = :{k}, "
+            expr_attr_values[f":{k}"] = v
+            expr_attr_names[f"#{k}"] = k
+            
+        update_expr = update_expr.rstrip(", ")
+
+        response = users_table.update_item(
+            Key={'user_id': user_id},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_attr_values,
+            ExpressionAttributeNames=expr_attr_names,
+            ReturnValues="ALL_NEW"
+        )
+        return UserProfile(**response.get('Attributes', {}))
+    except ClientError as e:
+        logger.error(f"Error updating user in DynamoDB: {e}")
+        return None
 
 
 # ─── Price Queries (with real data) ────────────────────────────────
 
-def get_current_price(product_query: str, region: str = "delhi", pincode: str | None = None) -> PriceData | None:
+def get_current_price(product_query: str, region: str = "delhi", pincode: str | None = None, state: str | None = None, district: str | None = None) -> PriceData | None:
     """
     Get today's price for a product.
-    Uses real data.gov.in API when pincode is provided, falls back to seed data.
+    Implemented with Cache-Aside Pattern using DynamoDB TTL.
     """
-    # Try real data first if pincode is available
-    if pincode:
-        real_data = get_real_price(product_query, pincode)
-        if real_data:
-            location = lookup_pincode(pincode)
-            logger.info(
-                f"Real price for {product_query} in {location['city']}: "
-                f"₹{real_data['mandi_price']}/kg (mandi), "
-                f"₹{real_data['local_avg']}/kg (retail)"
-            )
-            return PriceData(
-                product_id=real_data["product_id"],
-                product_name=real_data["product_name"],
-                date=real_data.get("arrival_date", datetime.now().strftime("%d/%m/%Y")),
-                region=real_data["city"],
-                mandi_price=real_data["mandi_price"],
-                bigbasket_price=real_data["bigbasket_price"],
-                jiomart_price=real_data["jiomart_price"],
-                local_avg=real_data["local_avg"],
-                recommended_retail=real_data["recommended_retail"],
-                demand_trend=real_data["demand_trend"],
-                unit=real_data["unit"],
-            )
-
-    # Fallback to seed data
     product_id = find_product_id(product_query)
     if not product_id:
         return None
 
-    if region not in REGIONS:
-        region = "delhi"
+    # Determine region key — use the custom city name sent from frontend (e.g. "Siliguri")
+    cache_region = region
+    
+    # 1. Check DynamoDB Cache
+    if DYNAMODB_AVAILABLE:
+        try:
+            response = market_table.get_item(Key={'product_id': product_id, 'region': cache_region})
+            item = response.get('Item')
+            
+            # Cache Hit: Ensure it hasn't expired (DynamoDB TTL deletion is inexact)
+            if item and int(item.get('expiration_time', 0)) > int(datetime.now().timestamp()):
+                logger.info(f"CACHE HIT: Returning {product_id} in {cache_region} from DynamoDB.")
+                # We pop internal keys to match schema
+                item.pop('expiration_time', None)
+                item.pop('product_id', None)
+                item.pop('region', None)
+                
+                return PriceData(
+                    product_id=product_id,
+                    region=cache_region,
+                    **item
+                )
+        except ClientError as e:
+            logger.error(f"DynamoDB cache read failed: {e}")
 
-    record = generate_price_record(product_id, region, datetime.now())
+    # 2. Cache Miss: Fetch Real Data
+    logger.info(f"CACHE MISS: Fetching fresh data for {product_id} in {cache_region}...")
+    logger.info(f"GPS PARAMS: state={state}, district={district}, pincode={pincode}, region={region}")
+    final_data = None
+    
+    if state and district:
+        real_data = get_real_price(product_query, pincode or "110001", state=state, district=district, city=district)
+        if real_data:
+            final_data = {
+                "product_name": real_data["product_name"],
+                "date": real_data.get("arrival_date", datetime.now().strftime("%d/%m/%Y")),
+                "mandi_price": real_data["mandi_price"],
+                "bigbasket_price": real_data["bigbasket_price"],
+                "jiomart_price": real_data["jiomart_price"],
+                "local_avg": real_data["local_avg"],
+                "recommended_retail": real_data["recommended_retail"],
+                "demand_trend": real_data["demand_trend"],
+                "unit": real_data["unit"],
+            }
+
+    # Fallback to seed if real data failed or pincode missing
+    if not final_data:
+        if region not in REGIONS:
+            region = "delhi"
+        record = generate_price_record(product_id, region, datetime.now())
+        final_data = {
+            "product_name": record["product_name"],
+            "date": record["date"],
+            "mandi_price": float(record["mandi_price"]),
+            "bigbasket_price": float(record["bigbasket_price"]),
+            "jiomart_price": float(record["jiomart_price"]),
+            "local_avg": float(record["local_avg"]),
+            "recommended_retail": float(record["recommended_retail"]),
+            "demand_trend": record["demand_trend"],
+            "unit": record["unit"],
+        }
+
+    # 3. Write back to Cache (TTL exactly 24 hours from now)
+    if DYNAMODB_AVAILABLE and final_data:
+        try:
+            expiration_epoch = int((datetime.now() + timedelta(hours=24)).timestamp())
+            
+            # Serialize floats to Decimals for DynamoDB
+            import decimal
+            dynamo_item = json.loads(json.dumps(final_data), parse_float=decimal.Decimal)
+            
+            market_table.put_item(Item={
+                'product_id': product_id,
+                'region': cache_region,
+                'expiration_time': expiration_epoch,
+                **dynamo_item
+            })
+            logger.info(f"CACHE WRITE: Saved {product_id} in {cache_region} to DynamoDB (TTL 24h).")
+        except Exception as e:
+            logger.error(f"DynamoDB cache write failed: {e}")
+
+    # Return structured Pydantic object
     return PriceData(
-        product_id=record["product_id"],
-        product_name=record["product_name"],
-        date=record["date"],
-        region=record["region"],
-        mandi_price=record["mandi_price"],
-        bigbasket_price=record["bigbasket_price"],
-        jiomart_price=record["jiomart_price"],
-        local_avg=record["local_avg"],
-        recommended_retail=record["recommended_retail"],
-        demand_trend=record["demand_trend"],
-        unit=record["unit"],
+        product_id=product_id,
+        region=cache_region,
+        **final_data
     )
 
 
-def get_competitor_prices(product_query: str, region: str = "delhi", pincode: str | None = None) -> dict | None:
-    """Get competitor price comparison. Uses real data when available."""
-    # Try real data first
-    if pincode:
-        real_data = get_real_price(product_query, pincode)
-        if real_data:
-            city = real_data["city"]
-            prices = [
-                {
-                    "source": f"🏪 Mandi ({real_data.get('market', 'Wholesale')})",
-                    "price": real_data["mandi_price"],
-                    "is_real": True,
-                },
-                {
-                    "source": "🛒 BigBasket",
-                    "price": real_data["bigbasket_price"],
-                    "is_real": real_data.get("bigbasket_scraped", False),
-                },
-                {
-                    "source": "🛍️ JioMart",
-                    "price": real_data["jiomart_price"],
-                    "is_real": real_data.get("jiomart_scraped", False),
-                },
-                {
-                    "source": "📊 Local Avg",
-                    "price": real_data["local_avg"],
-                    "is_real": False,
-                },
-                {
-                    "source": "✅ Recommended",
-                    "price": real_data["recommended_retail"],
-                    "is_real": False,
-                },
-            ]
-            return {
-                "product_name": real_data["product_name"],
-                "region": city,
-                "unit": real_data["unit"],
-                "prices": prices,
-                "demand_trend": real_data["demand_trend"],
-                "data_source": real_data.get("data_source", "data.gov.in"),
-                "is_real_data": True,
-            }
-
-    # Fallback to seed data
-    product_id = find_product_id(product_query)
-    if not product_id:
+def get_competitor_prices(product_query: str, region: str = "delhi", pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict | None:
+    """Get competitor price comparison. Leverages the cached get_current_price architecture."""
+    # This automatically handles DynamoDB TTL caching and data.gov.in fetching
+    price_data = get_current_price(product_query, region, pincode, state=state, district=district)
+    
+    if not price_data:
         return None
 
-    if region not in REGIONS:
-        region = "delhi"
+    prices = []
 
-    record = generate_price_record(product_id, region, datetime.now())
+    # Only include mandi price for products actually traded in mandis
+    product_id = find_product_id(product_query)
+    if product_id and is_mandi_product(product_id) and price_data.mandi_price > 0:
+        prices.append({
+            "source": "🏪 Mandi (Wholesale)",
+            "price": price_data.mandi_price,
+            "is_real": True,
+        })
+
+    prices.extend([
+        {
+            "source": "🛒 BigBasket",
+            "price": price_data.bigbasket_price,
+            "is_real": True,
+        },
+        {
+            "source": "🛍️ JioMart",
+            "price": price_data.jiomart_price,
+            "is_real": True,
+        },
+        {
+            "source": "📊 Local Avg",
+            "price": price_data.local_avg,
+            "is_real": True,
+        },
+        {
+            "source": "✅ Recommended",
+            "price": price_data.recommended_retail,
+            "is_real": True,
+        },
+    ])
+
     return {
-        "product_name": record["product_name"],
-        "region": REGIONS[region]["city"],
-        "unit": record["unit"],
-        "prices": [
-            {"source": "Mandi (Wholesale)", "price": record["mandi_price"]},
-            {"source": "BigBasket", "price": record["bigbasket_price"]},
-            {"source": "JioMart", "price": record["jiomart_price"]},
-            {"source": "Local Average", "price": record["local_avg"]},
-            {"source": "✅ Recommended Retail", "price": record["recommended_retail"]},
-        ],
-        "demand_trend": record["demand_trend"],
-        "is_real_data": False,
+        "product_name": price_data.product_name,
+        "region": price_data.region,
+        "unit": price_data.unit,
+        "prices": prices,
+        "demand_trend": price_data.demand_trend,
+        "data_source": "DynamoDB Cache / data.gov.in",
+        "is_real_data": True,
     }
 
 
-def get_mandi_rates(product_query: str, region: str = "delhi", pincode: str | None = None) -> list[MandiRate]:
-    """Get mandi rates. Uses real data.gov.in API when pincode is available."""
+def get_mandi_rates(product_query: str, region: str = "delhi", pincode: str | None = None, state: str | None = None, district: str | None = None) -> list[MandiRate]:
+    """Get mandi rates. Uses real data.gov.in API when location is available."""
+    # Non-mandi products (dairy, eggs/meat, FMCG) are not traded in mandis
+    product_id = find_product_id(product_query)
+    if product_id and not is_mandi_product(product_id):
+        logger.info(f"Skipping mandi rates for non-mandi product: {product_id}")
+        return []
+
     # Try real data first
-    if pincode:
-        real_rates = get_real_mandi_rates(product_query, pincode)
+    if state and district:
+        real_rates = get_real_mandi_rates(product_query, pincode=pincode, state=state, district=district)
         if real_rates:
             logger.info(f"Got {len(real_rates)} real mandi rates for {product_query}")
             return [

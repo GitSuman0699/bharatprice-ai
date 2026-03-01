@@ -20,6 +20,8 @@ class ChatRequest(BaseModel):
     language: Language = Field(default=Language.ENGLISH, description="Preferred language")
     region: str = Field(default="delhi", description="User's region/city for price data")
     pincode: Optional[str] = Field(default=None, description="User's pincode for locality-level pricing")
+    state: Optional[str] = Field(default=None, description="Explicit state from frontend GPS")
+    district: Optional[str] = Field(default=None, description="Explicit district from frontend GPS")
     session_id: Optional[str] = Field(default=None, description="Conversation session ID")
 
 
