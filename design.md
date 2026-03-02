@@ -43,6 +43,7 @@
 ### 3. AI Reasoning Engine (Amazon Bedrock)
 - **Model:** Anthropic Claude 3 Haiku (`anthropic.claude-3-haiku-20240307-v1:0`).
 - **Function:** Evaluates user intent, processes raw agricultural data returned by the data fetcher, and generates natural language price recommendations. Capable of processing English, Hindi, and regional language text natively.
+- **Competitor Comparison:** The AI is prompted to compare proposed prices against known online marketplace rates (like BigBasket, JioMart, etc.) if data is provided in the prompt context or available within the model's localized knowledge base.
 
 ### 4. Live Data Integration
 - **Source:** Government of India Open Data API (`data.gov.in`).

@@ -36,6 +36,17 @@ BharatPrice AI is an AI-powered hyperlocal pricing intelligence platform for Ind
 
 ---
 
+### US-004: Competitor Price Comparison
+**As a** store owner,
+**I want to** compare my prices with online platforms like BigBasket and JioMart,
+**So that** I know if I'm overpricing or underpricing my local customers.
+
+**Acceptance Criteria:**
+- System analyzes user's query and fetches or infers current online platform prices (if available).
+- Response includes a comparison point against these popular online platforms to help the user benchmark their retail price.
+
+---
+
 ## Functional Requirements
 
 | ID | Requirement | Status |
