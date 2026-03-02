@@ -2,7 +2,10 @@
 
 > AI-powered hyperlocal pricing intelligence for Kirana stores
 
-[![Powered by AWS](https://img.shields.io/badge/Powered%20by-AWS%20Bedrock-232F3E)](https://aws.amazon.com/bedrock/)
+**Built for the [AI for Bharat Hackathon](https://vision.hack2skill.com/event/ai-for-bharat), organized by Hack2skill and powered by AWS.**
+
+[![AI for Bharat Hackathon](https://img.shields.io/badge/AI%20for%20Bharat-Hackathon%202026-FF6B2C)](https://vision.hack2skill.com/event/ai-for-bharat)
+
 
 ## 🎯 Problem Statement
 Kirana store owners lack access to real-time competitive pricing data. They set prices based on gut feeling, leading to lost margins.
@@ -10,6 +13,7 @@ Kirana store owners lack access to real-time competitive pricing data. They set 
 ## 💡 Solution
 BharatPrice AI is a conversational web-based AI assistant that helps kirana store owners:
 - **Get smart price recommendations** — AI-generated optimal selling prices based on live mandi rates.
+- **Compare competitor prices** — Compare your prices with online platforms like BigBasket, JioMart, etc. (if data is available for that region).
 - **Track mandi wholesale rates** — Find the current wholesale rates for commodities across India.
 
 ## 🏗️ Architecture
