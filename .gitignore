@@ -27,3 +27,11 @@ Thumbs.db
 
 # AWS
 .aws-sam/
+
+# Deployment artifacts
+*.zip
+backend/package/
+backend/env.json
+backend/trust-policy.json
+backend/lambda_logs.txt
+frontend/custom-rules.json
