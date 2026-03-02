@@ -2,7 +2,6 @@
 # Script to package and deploy BharatPrice AI backend to AWS Lambda + API Gateway
 # Handles Windows → Linux cross-compilation for pydantic_core native binaries
 
-$ErrorActionPreference = "Stop"
 
 # ── Refresh PATH so aws CLI is available ─────────────────────────
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
@@ -79,6 +78,8 @@ if (-not $roleArn -or $roleArn -eq "None") {
     $trustPolicy | Out-File -Encoding ascii trust-policy.json
     aws iam create-role --role-name $ROLE_NAME --assume-role-policy-document file://trust-policy.json --no-cli-pager | Out-Null
     aws iam attach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole --no-cli-pager
+    aws iam attach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess --no-cli-pager
+    aws iam attach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess --no-cli-pager
     Write-Host "       Waiting 10s for IAM propagation..."
     Start-Sleep -Seconds 10
     $roleArn = aws iam get-role --role-name $ROLE_NAME --query "Role.Arn" --output text --no-cli-pager
@@ -97,6 +98,7 @@ $envObj = @{
         DATA_GOV_API_KEY = if ($envVars["DATA_GOV_API_KEY"]) { $envVars["DATA_GOV_API_KEY"] } else { "" }
         API_SECRET_KEY   = if ($envVars["API_SECRET_KEY"])   { $envVars["API_SECRET_KEY"] }   else { "" }
         ALLOWED_HOSTS    = if ($envVars["ALLOWED_HOSTS"])    { $envVars["ALLOWED_HOSTS"] }    else { "*" }
+        CORS_ORIGINS     = if ($envVars["CORS_ORIGINS"])     { $envVars["CORS_ORIGINS"] }     else { "*" }
         USE_LOCAL_DATA   = "true"
         USE_REAL_PRICES  = "true"
     }
@@ -150,7 +152,7 @@ if (-not $apiId -or $apiId -eq "None" -or $apiId.Trim() -eq "") {
     Write-Host "       Creating HTTP API..."
     $lambdaArn = aws lambda get-function --function-name $FUNCTION_NAME --query "Configuration.FunctionArn" --output text --region $REGION --no-cli-pager
 
-    $apiResult = aws apigatewayv2 create-api --name $API_NAME --protocol-type HTTP --target $lambdaArn --region $REGION --no-cli-pager | ConvertFrom-Json
+    $apiResult = aws apigatewayv2 create-api --name $API_NAME --protocol-type HTTP --target $lambdaArn --cors-configuration AllowOrigins='*',AllowMethods='GET,POST,PUT,OPTIONS',AllowHeaders='Content-Type,X-API-Key',MaxAge=3600 --region $REGION --no-cli-pager | ConvertFrom-Json
     $apiId = $apiResult.ApiId
 
     # Grant API Gateway permission to invoke Lambda

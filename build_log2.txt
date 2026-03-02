@@ -1,0 +1,70 @@
+2026-03-02T06:50:07.338Z [INFO]: # Build environment configured with Standard build compute type: 8GiB Memory, 4vCPUs, 128GB Disk Space
+2026-03-02T06:50:07.576Z [INFO]: # Retrieving Git provider SSH public keys
+2026-03-02T06:50:13.826Z [INFO]: # Successfully retrieved Git provider SSH public keys
+2026-03-02T06:50:13.901Z [INFO]: # Cloning repository: git@github.com:GitSuman0699/bharatprice-ai.git
+2026-03-02T06:50:17.245Z [INFO]: Agent pid 462
+2026-03-02T06:50:17.329Z [INFO]: Identity added: /root/.ssh/git_rsa (/root/.ssh/git_rsa)
+                                 Cloning into 'bharatprice-ai'...
+2026-03-02T06:50:17.329Z [INFO]: # Checking for Git submodules at: /codebuild/output/src1360829079/src/bharatprice-ai/.gitmodules
+2026-03-02T06:50:17.341Z [INFO]: # Retrieving environment cache...
+2026-03-02T06:50:17.369Z [WARNING]: ! Unable to write cache: {"code":"ERR_BAD_REQUEST","message":"Request failed with status code 404"})}
+2026-03-02T06:50:17.369Z [INFO]: ---- Setting Up SSM Secrets ----
+2026-03-02T06:50:17.369Z [INFO]: SSM params {"Path":"/amplify/d1qgrloctl8d3m/master/","WithDecryption":true}
+2026-03-02T06:50:17.403Z [WARNING]: !Failed to set up process.env.secrets
+2026-03-02T06:50:17.754Z [INFO]: # No package override configuration found.
+2026-03-02T06:50:17.760Z [INFO]: # Retrieving cache...
+2026-03-02T06:50:17.792Z [INFO]: # Retrieved cache
+2026-03-02T06:50:22.532Z [INFO]: ## Starting Backend Build
+                                 ## Checking for associated backend environment...
+                                 ## No backend environment association found, continuing...
+                                 ## Completed Backend Build
+2026-03-02T06:50:22.538Z [INFO]: {"backendDuration": 0}
+                                 ## Starting Frontend Build
+                                 # Starting phase: preBuild
+                                 # Executing command: npm ci
+2026-03-02T06:50:48.388Z [INFO]: added 346 packages, and audited 347 packages in 21s
+2026-03-02T06:50:48.392Z [INFO]: 141 packages are looking for funding
+                                 run `npm fund` for details
+                                 found 0 vulnerabilities
+2026-03-02T06:50:48.406Z [INFO]: # Completed phase: preBuild
+                                 # Starting phase: build
+2026-03-02T06:50:48.406Z [INFO]: # Executing command: env | grep -e NEXT_PUBLIC_ >> .env.production
+2026-03-02T06:50:48.408Z [INFO]: # Executing command: npm run build
+2026-03-02T06:50:48.504Z [INFO]: > frontend@0.1.0 build
+                                 > next build
+2026-03-02T06:50:49.362Z [INFO]: ⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache
+2026-03-02T06:50:49.373Z [INFO]: Attention: Next.js now collects completely anonymous telemetry regarding usage.
+2026-03-02T06:50:49.373Z [INFO]: This information is used to shape Next.js' roadmap and prioritize features.
+                                 You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+                                 https://nextjs.org/telemetry
+2026-03-02T06:50:49.383Z [INFO]: ▲ Next.js 16.1.6 (Turbopack)
+2026-03-02T06:50:49.384Z [INFO]: - Environments: .env.production
+2026-03-02T06:50:49.464Z [INFO]: Creating an optimized production build ...
+2026-03-02T06:50:52.716Z [INFO]: ✓ Compiled successfully in 2.8s
+2026-03-02T06:50:52.722Z [INFO]: Running TypeScript ...
+2026-03-02T06:50:54.995Z [INFO]: Collecting page data using 3 workers ...
+2026-03-02T06:50:55.399Z [INFO]: Generating static pages using 3 workers (0/5) ...
+2026-03-02T06:50:55.572Z [INFO]: Generating static pages using 3 workers (1/5)
+2026-03-02T06:50:55.575Z [INFO]: Generating static pages using 3 workers (2/5)
+2026-03-02T06:50:55.575Z [INFO]: Generating static pages using 3 workers (3/5)
+2026-03-02T06:50:55.575Z [INFO]: ✓ Generating static pages using 3 workers (5/5) in 176.3ms
+2026-03-02T06:50:55.587Z [INFO]: Finalizing page optimization ...
+2026-03-02T06:50:55.868Z [INFO]: 
+2026-03-02T06:50:55.873Z [INFO]: Route (app)
+                                 ┌ ○ /
+                                 ├ ○ /_not-found
+                                 └ ○ /chat
+                                 ○  (Static)  prerendered as static content
+2026-03-02T06:50:55.901Z [INFO]: # Completed phase: build
+                                 ## Completed Frontend Build
+2026-03-02T06:50:55.946Z [INFO]: ## Build completed successfully
+2026-03-02T06:50:55.948Z [INFO]: # Starting caching...
+2026-03-02T06:50:55.952Z [INFO]: # Creating cache artifact...
+2026-03-02T06:50:55.956Z [INFO]: # Created cache artifact
+2026-03-02T06:50:55.956Z [INFO]: # Uploading cache artifact...
+2026-03-02T06:50:56.028Z [INFO]: # Uploaded cache artifact
+2026-03-02T06:50:56.028Z [INFO]: # Caching completed
+2026-03-02T06:50:56.035Z [ERROR]: !!! CustomerError: Can't find required-server-files.json in build output directory
+2026-03-02T06:50:56.036Z [INFO]: # Starting environment caching...
+2026-03-02T06:50:56.036Z [INFO]: # Environment caching completed
+

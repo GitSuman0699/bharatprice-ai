@@ -31,8 +31,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if not settings.api_secret_key:
             return await call_next(request)
 
-        # Allow public paths through without a key
-        if request.url.path in _PUBLIC_PATHS:
+        # Allow public paths or CORS preflight requests through without a key
+        if request.url.path in _PUBLIC_PATHS or request.method == "OPTIONS":
             return await call_next(request)
 
         # Validate the key for all other routes
