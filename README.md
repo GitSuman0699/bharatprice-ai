@@ -1,45 +1,37 @@
 # 🏷️ BharatPrice AI
 
-> AI-powered hyperlocal pricing intelligence for India's 12M+ kirana stores
+> AI-powered hyperlocal pricing intelligence for Kirana stores
 
-[![AI for Bharat Hackathon](https://img.shields.io/badge/AI%20for%20Bharat-Hackathon%202026-FF6B2C)](https://hack2skill.com)
 [![Powered by AWS](https://img.shields.io/badge/Powered%20by-AWS%20Bedrock-232F3E)](https://aws.amazon.com/bedrock/)
 
 ## 🎯 Problem Statement
-
-Small kirana store owners across India lack access to real-time competitive pricing data. They set prices based on gut feeling, leading to lost margins or customers. With 12M+ kirana stores serving 80%+ of India's retail, this is a massive, underserved market.
+Kirana store owners lack access to real-time competitive pricing data. They set prices based on gut feeling, leading to lost margins.
 
 ## 💡 Solution
-
-BharatPrice AI is a conversational AI assistant that helps kirana store owners:
-
-- **Get smart price recommendations** — AI-generated optimal selling prices based on mandi rates, competitor data, and local averages
-- **Compare competitor prices** — See how your prices stack up against BigBasket, JioMart, and local market averages
-- **Track mandi wholesale rates** — Find the cheapest mandi to buy from across Azadpur, Vashi, Koyambedu, and 20+ mandis
-- **Analyze price trends** — Understand if prices are rising, falling, or stable over 30-day windows
-- **Forecast demand** — Get alerts about upcoming festivals, seasons, and weather events that impact demand
-
-All in **Hindi, English, Tamil, Telugu, and Marathi** — with voice input support.
+BharatPrice AI is a conversational web-based AI assistant that helps kirana store owners:
+- **Get smart price recommendations** — AI-generated optimal selling prices based on live mandi rates.
+- **Track mandi wholesale rates** — Find the current wholesale rates for commodities across India.
 
 ## 🏗️ Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
-│                 Custom Web Chat UI                   │
-│               (Next.js / TypeScript)                 │
+│                 Next.js Web Chat UI                  │
+│       (Hosted on AWS Amplify CI/CD, Static Export)   │
 └──────────────────────┬──────────────────────────────┘
-                       │ REST API
+                       │ REST API (X-API-Key Secured)
 ┌──────────────────────▼──────────────────────────────┐
-│              FastAPI Backend (Python)                 │
-│  Intent Classification → AI Engine → Response Gen    │
-└──────┬───────────────────────────────────┬──────────┘
-       │                                   │
-┌──────▼──────────┐              ┌────────▼──────────┐
-│  Amazon Bedrock  │              │  Seed Data Layer   │
-│  (Claude 3)      │              │  50+ products      │
-│  AI Reasoning    │              │  8 cities           │
-└─────────────────┘              │  30-day history     │
-                                 └────────────────────┘
+│               AWS API Gateway (HTTP API)             │
+│                        │                            │
+│           AWS Lambda (FastAPI Backend)               │
+│  Intent Classification → Cache Check → Response Gen  │
+└──────┬────────────────────┬──────────────┬───────────┘
+       │                    │              │
+┌──────▼──────────┐ ┌───────▼────────┐ ┌───▼───────────────┐
+│  Amazon Bedrock │ │ AWS DynamoDB   │ │  Live Data APIs   │
+│ (Claude 3 Haiku)│ │ (Caching + TTL)│ │  data.gov.in      │
+│  AI Reasoning   │ │                │ │  (AGMARKNET)      │
+└─────────────────┘ └────────────────┘ └───────────────────┘
 ```
 
 ## 🚀 Quick Start
@@ -47,9 +39,10 @@ All in **Hindi, English, Tamil, Telugu, and Marathi** — with voice input suppo
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+
-- (Optional) AWS credentials for Bedrock integration
+- AWS credentials (for Bedrock and live deployment)
+- Data.gov.in API Key
 
-### Backend
+### Backend setup
 
 ```bash
 cd backend
@@ -60,80 +53,78 @@ python -m venv venv
 source venv/bin/activate
 
 pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
+Create a `.env` file in the `backend` directory copying `.env.example`, then populate it with your AWS and Data.gov.in credentials.
+
+Run locally:
+```bash
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 Backend runs at `http://localhost:8000` with API docs at `http://localhost:8000/docs`
 
-### Frontend
+### Frontend setup
 
 ```bash
 cd frontend
 npm install
-npm run dev
 ```
 
+Create a `.env.local` file in the `frontend` directory:
+```
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_API_KEY=your_api_key_here
+```
+
+Run locally:
+```bash
+npm run dev
+```
 Frontend runs at `http://localhost:3000`
-
-## 📊 Features Demo
-
-| Feature | How to Try |
-|---------|-----------|
-| Price Check | "Aaj atta ka rate kya hai?" |
-| Hindi Support | "टमाटर का भाव बताओ" |
-| Competitor Compare | "Compare onion prices in Mumbai" |
-| Mandi Rates | "Mandi rates for potato" |
-| Price Trends | "Price trend of rice" |
-| Product Catalog | "Show all products" |
 
 ## 🛠️ Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 16, TypeScript, Vanilla CSS |
-| Backend | Python, FastAPI, Pydantic |
-| AI | Amazon Bedrock (Claude 3 Haiku) |
-| Data | Seed data engine (DynamoDB-ready) |
-| Languages | Hindi, English, Tamil, Telugu, Marathi |
-| Voice | Web Speech API (browser-based) |
+| Frontend | Next.js 16 (Static Export), TypeScript, Vanilla CSS |
+| Backend | Python 3.11, FastAPI, Pydantic, Mangum |
+| Deployment | AWS Amplify (Frontend), AWS Lambda + API Gateway (Backend) |
+| Caching | Amazon DynamoDB (with TTL for 24-hour automatic eviction) |
+| AI | Amazon Bedrock (Anthropic Claude 3 Haiku) |
+| Data Source | data.gov.in (AGMARKNET Prices) |
 
 ## 📁 Project Structure
 
-```
+```text
 bharatprice-ai/
+├── amplify.yml                  # AWS Amplify CI/CD build spec
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app entry point
+│   │   ├── main.py              # FastAPI app entry point & CORS
 │   │   ├── config.py            # Environment configuration
-│   │   ├── models/schemas.py    # Pydantic data models
-│   │   ├── routes/
-│   │   │   ├── chat.py          # Chat endpoint
-│   │   │   ├── data.py          # Price/mandi/trend endpoints
-│   │   │   └── user.py          # User profile endpoints
+│   │   ├── middleware/          # Security & Rate Limiting (slowapi)
+│   │   ├── models/              # Pydantic data models
+│   │   ├── routes/              # Chat & Health API endpoints
 │   │   ├── services/
-│   │   │   ├── ai_engine.py     # AI + intent classification
-│   │   │   └── database.py      # Data access layer
-│   │   └── data/
-│   │       └── seed_data.py     # Realistic seed data generator
+│   │   │   ├── ai_engine.py     # Bedrock AI integration
+│   │   │   └── data_fetcher.py  # Data.gov.in API integration
+│   │   └── data/                # Fallback static datasets
+│   ├── deploy_backend.ps1       # Lambda automated deployment script
 │   └── requirements.txt
 ├── frontend/
+│   ├── next.config.ts           # Next.js export & image config
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── page.tsx         # Landing page
 │   │   │   ├── chat/page.tsx    # Interactive chat UI
 │   │   │   ├── layout.tsx       # Root layout
 │   │   │   └── globals.css      # Design system
-│   │   └── lib/api.ts           # API client
+│   │   └── lib/api.ts           # Axios API client wrapper
 │   └── package.json
 ├── design.md                    # System design document
 ├── requirements.md              # Requirements & user stories
 └── README.md
 ```
 
-## 👥 Team
-
-**BharatPrice AI** — AI for Bharat Hackathon 2026
-
 ## 📄 License
-
 MIT

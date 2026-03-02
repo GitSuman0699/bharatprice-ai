@@ -2,182 +2,61 @@
 
 ## System Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                    USER INTERFACE LAYER                  │
-│         WhatsApp Business API  /  Voice (IVR)           │
+│               Next.js Web Chat Application              │
+│               (Deployed on AWS Amplify)                 │
+└──────────────────────┬──────────────────────────────────┘
+                       │ HTTPS / REST
+┌──────────────────────▼──────────────────────────────────┐
+│                    API GATEWAY LAYER                    │
+│             AWS API Gateway (HTTP API)                  │
+│             (CORS & Preflight Handling)                 │
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│               INGESTION & NLP LAYER (AWS)               │
-│  API Gateway → Transcribe → Translate → Intent Router   │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                  AI PROCESSING LAYER                    │
-│  Amazon Bedrock (GenAI)  │  SageMaker (Forecasting)    │
-└──────────┬───────────────────────────┬──────────────────┘
-           │                           │
-┌──────────▼───────────┐  ┌────────────▼─────────────────┐
-│    STORAGE LAYER     │  │     DATA PIPELINE LAYER      │
-│  DynamoDB │ S3 │     │  │  Lambda + EventBridge +      │
-│  ElastiCache         │  │  Step Functions              │
-└──────────────────────┘  └────────────┬─────────────────┘
-                                       │
-                          ┌────────────▼─────────────────┐
-                          │     EXTERNAL DATA SOURCES    │
-                          │  Agmarknet │ ONDC │ Govt     │
-                          │  E-commerce │ IMD Weather    │
-                          └──────────────────────────────┘
+│                   COMPUTE LAYER                         │
+│             AWS Lambda (FastAPI Python)                 │
+│       (API Key Validation, Rate Limiting)               │
+└──────────┬───────────────────┬────────────────┬─────────┘
+           │                   │                │
+┌──────────▼───────────┐ ┌─────▼──────────┐ ┌───▼─────────────┐
+│     AI PROCESSING    │ │HOT CACHE LAYER │ │  DATA SOURCES   │
+│    Amazon Bedrock    │ │Amazon DynamoDB │ │  data.gov.in    │
+│  (Claude 3 Haiku)    │ │(via TTL index) │ │  (AGMARKNET)    │
+└──────────────────────┘ └────────────────┘ └─────────────────┘
 ```
-
----
 
 ## Component Design
 
-### 1. WhatsApp Interface Service
-- **Technology:** WhatsApp Business API (Meta Cloud API)
-- **Function:** Receives user messages (text/voice), routes to backend, delivers responses
-- **Webhook:** Registered with API Gateway endpoint
-- **Message Types:** Text, voice note, interactive buttons
+### 1. Web Frontend (Next.js)
+- **Technology:** Next.js 16 (Static Export), React, TypeScript, Vanilla CSS.
+- **Function:** Provides a fully-styled, glassmorphism chat interface for users to ask pricing questions.
+- **Deployment:** AWS Amplify CI/CD connected directly to the GitHub repository (Monorepo setup).
 
-### 2. NLP & Language Service
-- **Amazon Transcribe:** Converts voice notes to text (supports Hindi, Tamil, Telugu, Marathi, English)
-- **Amazon Translate:** Translates regional language input to English for processing
-- **Amazon Comprehend:** Extracts entities (product name, location) and detects intent
-- **Amazon Polly:** Converts text response back to voice note in user's language
+### 2. Backend API (FastAPI)
+- **Technology:** Python 3.11, FastAPI, Pydantic, Mangum (for Lambda adaptation).
+- **Function:** Receives chat messages, fetches live context data, and queries the LLM.
+- **Deployment:** AWS Lambda deployed via standard zip packaging. AWS API Gateway HTTP API handles routing and CORS preflight explicitly. Managed via PowerShell automation.
 
-### 3. AI Reasoning Engine
-- **Amazon Bedrock (Claude/Titan):**
-  - Understands user query intent (price check, comparison, forecast)
-  - Generates personalized price recommendations with reasoning
-  - Produces natural language responses in vernacular
-- **Prompt Template:** Structured prompt with user profile, product data, market context, and competitor prices
+### 3. AI Reasoning Engine (Amazon Bedrock)
+- **Model:** Anthropic Claude 3 Haiku (`anthropic.claude-3-haiku-20240307-v1:0`).
+- **Function:** Evaluates user intent, processes raw agricultural data returned by the data fetcher, and generates natural language price recommendations. Capable of processing English, Hindi, and regional language text natively.
 
-### 4. Demand Forecasting Service
-- **Amazon SageMaker:**
-  - Time-series model trained on historical price + sales data
-  - Inputs: weather forecasts, festival calendar, seasonal patterns
-  - Output: Predicted demand change % per product per region
+### 4. Live Data Integration
+- **Source:** Government of India Open Data API (`data.gov.in`).
+- **Function:** Provides real-time and historical wholesale Mandi rates for various commodities across Indian states and districts.
 
-### 5. Data Pipeline
-- **AWS EventBridge:** Triggers daily data collection at 6 AM IST
-- **AWS Lambda:** Scraper functions for each data source
-- **AWS Step Functions:** Orchestrates ETL — scrape → clean → transform → store
-- **Data Sources:**
-  - Agmarknet API → Mandi wholesale prices
-  - ONDC API → Marketplace listing prices
-  - Consumer Affairs Portal → Government retail price bulletins
-  - IMD API → Weather forecasts
-  - Custom dataset → Indian festival/event calendar
+### 5. Hot Caching Layer (DynamoDB)
+- **Technology:** Amazon DynamoDB.
+- **Function:** The `data.gov.in` API limits requests and can be slow. We store the daily mandi rates for requested states in DynamoDB to return them instantly on subsequent queries.
+- **Eviction Strategy:** DynamoDB Time-to-Live (TTL) is heavily utilized. Cache records are set to automatically expire after 24 hours, ensuring the AI always provides completely fresh mandi rates the next day without manual cache purging.
 
-### 6. Storage
+## Security Architecture
 
-| Store | Technology | Purpose |
-|-------|-----------|---------|
-| User Profiles | DynamoDB | Store location, preferences, language |
-| Price Data | DynamoDB | Daily prices by product, location, source |
-| Raw Data | S3 | Raw scraped data for auditing |
-| Real-time Cache | ElastiCache (Redis) | Frequently queried prices for fast response |
-
----
-
-## Data Flow
-
-### Query Flow (User asks for price)
-```
-User (WhatsApp) → API Gateway → Lambda
-  → Transcribe (if voice) → Translate (if regional)
-  → Comprehend (extract product + intent)
-  → Bedrock (generate recommendation using DynamoDB data)
-  → Translate (back to user's language)
-  → Polly (if voice response needed)
-  → WhatsApp API → User
-```
-
-### Data Ingestion Flow (Daily automated)
-```
-EventBridge (6 AM cron) → Step Functions
-  → Lambda scrapers (Agmarknet, ONDC, Govt, Weather)
-  → S3 (raw data)
-  → Transform Lambda (clean + normalize)
-  → DynamoDB (structured price data)
-  → ElastiCache (hot cache update)
-```
-
-### Alert Flow (Proactive notifications)
-```
-EventBridge (daily check) → Lambda
-  → SageMaker (demand prediction)
-  → Bedrock (generate alert message)
-  → Translate + Polly
-  → WhatsApp API → Subscribed Users
-```
-
----
-
-## API Design
-
-### Internal APIs (Lambda Functions)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/webhook/whatsapp` | POST | Receives WhatsApp messages |
-| `/query/price` | POST | Processes price recommendation query |
-| `/query/compare` | POST | Fetches competitor comparison |
-| `/query/mandi` | POST | Returns nearby mandi rates |
-| `/query/trend` | POST | Returns price history/trends |
-| `/user/profile` | POST/PUT | Creates or updates user profile |
-| `/alerts/forecast` | GET | Triggers demand forecast alerts |
-| `/data/ingest` | POST | Triggers manual data ingestion |
-
----
-
-## Database Schema
-
-### Users Table (DynamoDB)
-```json
-{
-  "userId": "wa_919876543210",
-  "storeName": "Ramesh General Store",
-  "pinCode": "110001",
-  "city": "Delhi",
-  "language": "hi",
-  "categories": ["grocery", "dairy", "snacks"],
-  "createdAt": "2026-02-14T10:00:00Z"
-}
-```
-
-### Prices Table (DynamoDB)
-```json
-{
-  "productId": "atta_10kg",
-  "date": "2026-02-14",
-  "region": "delhi_central",
-  "mandiPrice": 280,
-  "oncdPrice": 310,
-  "bigbasketPrice": 335,
-  "jioMartPrice": 320,
-  "localAvg": 325,
-  "recommendedRetail": 320,
-  "demandTrend": "rising",
-  "source": "agmarknet,ondc,scraper"
-}
-```
-
----
-
-## Security & Privacy
-- All data encrypted at rest (S3, DynamoDB) and in transit (TLS 1.2+)
-- No personal customer data stored — only store owner profiles
-- WhatsApp messages are not stored beyond processing
-- IAM roles with least-privilege access for all Lambda functions
-- API Gateway with rate limiting and WAF protection
-
----
-
-## Scalability
-- **Serverless architecture** — Lambda auto-scales with demand
-- **DynamoDB on-demand** — scales read/write capacity automatically
-- **ElastiCache** — reduces Bedrock calls for repeated queries
-- **Regional deployment** — ap-south-1 (Mumbai) for low latency
+- **API Authentication:** Custom `APIKeyMiddleware` validates an `X-API-Key` header for all protected routes (e.g., `/api/chat`).
+- **CORS Handling:** Managed natively by AWS API Gateway (`OPTIONS` method) to allow secure cross-origin requests from the Amplify frontend, avoiding preflight rejection.
+- **Rate Limiting:** IP-based requests are throttled using `slowapi` to prevent API endpoint abuse and AWS billing runaways.
+- **API Hiding:** `/docs` and `/redoc` Swagger documentation endpoints are programmatically hidden when executing inside the production AWS Lambda environment.
+- **IAM:** Lambda execution role is strictly scoped, currently utilizing managed policies for `AmazonBedrockFullAccess` and standard execution.
