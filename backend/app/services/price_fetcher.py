@@ -151,7 +151,7 @@ def scrape_bigbasket_price(product_id: str) -> dict | None:
                 "local_est": result.local_market_price,
             }
     except Exception as e:
-        logger.debug(f"BigBasket scraper failed for {product_id}: {e}")
+        logger.warning(f"BigBasket scraper failed for {product_id}: {type(e).__name__}: {e}")
 
     return None
 

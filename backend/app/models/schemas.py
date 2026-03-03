@@ -23,6 +23,7 @@ class ChatRequest(BaseModel):
     state: Optional[str] = Field(default=None, description="Explicit state from frontend GPS")
     district: Optional[str] = Field(default=None, description="Explicit district from frontend GPS")
     session_id: Optional[str] = Field(default=None, description="Conversation session ID")
+    chat_history: list[dict] = Field(default_factory=list, description="Previous chat messages for context")
 
 
 class PriceInfo(BaseModel):

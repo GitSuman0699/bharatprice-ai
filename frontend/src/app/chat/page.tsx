@@ -417,6 +417,15 @@ export default function ChatPage() {
         setSuggestions([]);
 
         try {
+            // Build chat history from recent messages (exclude welcome, keep last 6)
+            const history = messages
+                .filter(m => m.id !== "welcome")
+                .slice(-6)
+                .map(m => ({
+                    role: m.sender === "bot" ? "assistant" : "user",
+                    content: m.text,
+                }));
+
             const payload = {
                 message: messageText,
                 language: language,
@@ -424,6 +433,7 @@ export default function ChatPage() {
                 pincode: pincode || undefined,
                 state: locationState || undefined,
                 district: locationDistrict || undefined,
+                chat_history: history,
             };
             console.log("SENDING TO BACKEND:", JSON.stringify(payload));
             const response: ChatResponse = await sendChat(payload);

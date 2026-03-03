@@ -14,6 +14,7 @@ export interface ChatRequest {
     state?: string;
     district?: string;
     session_id?: string;
+    chat_history?: { role: string; content: string }[];
 }
 
 export interface ChatResponse {

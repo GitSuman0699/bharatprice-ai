@@ -20,6 +20,7 @@ async def chat(request: Request, body: ChatRequest):
         pincode=body.pincode,
         state=body.state,
         district=body.district,
+        chat_history=body.chat_history,
     )
 
     return ChatResponse(

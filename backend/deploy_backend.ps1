@@ -99,6 +99,7 @@ $envObj = @{
         API_SECRET_KEY   = if ($envVars["API_SECRET_KEY"])   { $envVars["API_SECRET_KEY"] }   else { "" }
         ALLOWED_HOSTS    = if ($envVars["ALLOWED_HOSTS"])    { $envVars["ALLOWED_HOSTS"] }    else { "*" }
         CORS_ORIGINS     = if ($envVars["CORS_ORIGINS"])     { $envVars["CORS_ORIGINS"] }     else { "*" }
+        SCRAPER_ENABLED  = if ($envVars["SCRAPER_ENABLED"])  { $envVars["SCRAPER_ENABLED"] }  else { "true" }
         USE_LOCAL_DATA   = "true"
         USE_REAL_PRICES  = "true"
     }

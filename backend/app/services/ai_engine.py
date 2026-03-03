@@ -108,7 +108,14 @@ def _fetch_price_context(product_query: str, region: str, pincode: str | None = 
         return {"error": f"No pricing data found for {product_query}"}
     
     city = price_data.region if pincode else REGIONS.get(region, {}).get("city", "your area")
-    source_badge = "Real-time data from data.gov.in (AGMARKNET)" if pincode else "Estimated data"
+
+    # Build accurate source badge
+    if pincode and state:
+        source_badge = "Live data from data.gov.in (AGMARKNET) + BigBasket"
+    elif pincode:
+        source_badge = "Real-time data from data.gov.in (AGMARKNET)"
+    else:
+        source_badge = "Estimated data (set your pincode for live prices)"
 
     # Resolve product ID to check if it's mandi-eligible
     product_id = resolve_product_id(product_query)
@@ -118,8 +125,8 @@ def _fetch_price_context(product_query: str, region: str, pincode: str | None = 
         "context_type": "current_price",
         "product": price_data.product_name,
         "location": city,
-        "bigbasket_estimated_price": price_data.bigbasket_price,
-        "jiomart_estimated_price": price_data.jiomart_price,
+        "bigbasket_price": price_data.bigbasket_price,
+        "jiomart_price": price_data.jiomart_price,
         "local_market_average": price_data.local_avg,
         "recommended_selling_price": price_data.recommended_retail,
         "unit": price_data.unit,
@@ -189,7 +196,7 @@ def _get_bedrock_client():
             logger.warning(f"Could not init Bedrock client: {e}")
     return None
 
-async def generate_ai_response(message: str, data_context: dict, language: str = "en") -> str:
+async def generate_ai_response(message: str, data_context: dict, language: str = "en", chat_history: list = None) -> str:
     """Generate a dynamic response using Amazon Bedrock (Claude 3 Haiku) based on the scraped data context."""
     
     # If no data found, return standard fallback early
@@ -241,17 +248,21 @@ USER QUESTION:
 """
 
     try:
+        # Build messages array with optional conversation history for context
+        messages = []
+        if chat_history:
+            messages.extend(chat_history)
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
+
         body = json.dumps({
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 512,
             "temperature": 0.3,
             "system": "You are BharatPrice AI, the ultimate data-driven pricing assistant for Kirana stores.",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            "messages": messages
         })
         
         response = client.invoke_model(
@@ -296,6 +307,7 @@ async def process_message(
     pincode: str | None = None,
     state: str | None = None,
     district: str | None = None,
+    chat_history: list = None,
 ) -> dict:
     """Process a user message, fetch context, and generate an AI response."""
 
@@ -303,13 +315,18 @@ async def process_message(
     product_id = extract_product(message)
     product_name = product_id or message 
 
-    # When GPS data (state/district) is available, use the frontend's region directly (e.g. "Siliguri")
-    if state and district and region:
+    extracted_region = extract_region(message)
+
+    # If the user explicitly asks for a region in their message (e.g., "in Mumbai"), prioritize it.
+    if extracted_region and extracted_region != "delhi":  # Assuming 'delhi' is the fallback in extract_region
+        resolved_region = extracted_region
+    # Otherwise, fallback to GPS data (state/district/pincode) or default region.
+    elif state and district and region:
         resolved_region = region
     elif region and region in REGIONS:
         resolved_region = region
     else:
-        resolved_region = extract_region(message)
+        resolved_region = extracted_region
 
     if state and district:
         logger.info(f"Processing with GPS State: {state}, District: {district}, Pincode: {pincode}")
@@ -386,7 +403,7 @@ async def process_message(
         suggestions = [hi_suggestions.get(s, s) for s in suggestions]
 
     # Generate the final natural language response using the LLM
-    final_reply = await generate_ai_response(message, data_context, language)
+    final_reply = await generate_ai_response(message, data_context, language, chat_history)
 
     return {
         "reply": final_reply,

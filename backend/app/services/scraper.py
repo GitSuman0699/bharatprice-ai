@@ -5,11 +5,15 @@ Fetches real retail prices from BigBasket using their internal listing API.
 import httpx
 import time
 import re
+import os
 import logging
 from typing import Optional
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+# Toggle scraping on/off via environment variable (default: enabled)
+SCRAPER_ENABLED = os.getenv("SCRAPER_ENABLED", "true").lower() == "true"
 
 # ─── Data models ────────────────────────────────────────────────────
 
@@ -137,7 +141,7 @@ class BigBasketScraper:
     BASE_URL = "https://www.bigbasket.com"
     API_URL = f"{BASE_URL}/listing-svc/v2/products"
     CACHE_TTL = 7200  # 2 hours
-    MIN_REQUEST_INTERVAL = 1.5  # seconds between requests
+    MIN_REQUEST_INTERVAL = 0.5  # seconds between requests (reduced for Lambda)
     SESSION_TTL = 1800  # refresh session every 30 min
 
     def __init__(self):
@@ -410,11 +414,20 @@ def scrape_product_price(product_id: str) -> Optional[PriceResult]:
 
     Returns:
         PriceResult with BigBasket, estimated JioMart, and local market prices,
-        or None if scraping fails.
+        or None if scraping fails or is disabled.
     """
+    if not SCRAPER_ENABLED:
+        logger.info(f"Scraper disabled via SCRAPER_ENABLED env var. Skipping {product_id}.")
+        return None
+
     try:
         scraper = get_scraper()
-        return scraper.get_best_price(product_id)
+        result = scraper.get_best_price(product_id)
+        if result:
+            logger.info(f"Scraper SUCCESS for {product_id}: BigBasket ₹{result.bigbasket_price}/kg")
+        else:
+            logger.warning(f"Scraper returned no results for {product_id}")
+        return result
     except Exception as e:
-        logger.error(f"Scraper error for {product_id}: {e}")
+        logger.warning(f"Scraper FAILED for {product_id}: {type(e).__name__}: {e}")
         return None

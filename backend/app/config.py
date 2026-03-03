@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"  # Allow extra env vars (e.g. BENCHMARK_API_URL) without crashing
 
 
 @lru_cache()
