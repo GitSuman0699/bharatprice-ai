@@ -199,8 +199,9 @@ def _get_bedrock_client():
 async def generate_ai_response(message: str, data_context: dict, language: str = "en", chat_history: list = None) -> str:
     """Generate a dynamic response using Amazon Bedrock (Claude 3 Haiku) based on the scraped data context."""
     
-    # If no data found, return standard fallback early
-    if "error" in data_context:
+    # If no data found AND no chat history, return standard fallback early.
+    # But if there IS chat history, let the LLM use it to answer follow-up questions.
+    if "error" in data_context and not chat_history:
         return f"I'm sorry, I couldn't find exact pricing data for that. Please try asking about common staples like Tomato, Onion, Potato, Atta, or Rice."
 
     client = _get_bedrock_client()
@@ -224,16 +225,18 @@ async def generate_ai_response(message: str, data_context: dict, language: str =
     disclaimer_text = disclaimers.get(language, disclaimers["en"])
 
     prompt = f"""You are BharatPrice AI, a highly intelligent pricing assistant for Indian Kirana (grocery) store owners.
-Your job is to answer the user's specific question using the provided real-time market data context.
+Your job is to answer the user's specific question using the provided real-time market data context AND any previous conversation history.
 
 CRITICAL INSTRUCTIONS:
 1. {language_instruction}
 2. Directly answer what the user asked. If they asked for a comparison, focus on the comparison. If they asked for a price, give the price clearly.
-3. ALWAYS include the 'Recommended Selling Price' if it is available in the context.
+3. ALWAYS list ALL available prices from the context in your response using bullet points. This includes BigBasket price, JioMart price, Local Market Average, Mandi Wholesale Price (if available), and Recommended Selling Price. Never omit any price.
 4. Provide the 'Profit Margin Tip' if available.
 5. Embellish your response with proper formatting (bolding, bullet points) and relevant emojis to make it easy to read on a mobile phone.
 6. Use the symbol ₹ for all currency values.
-7. AT THE VERY END of your response, you MUST append this exact markdown text with empty lines before and after it:
+7. If the user asks a follow-up question (e.g., "which is cheaper?", "what about onion?", "what was the mandi price?"), use the CONVERSATION HISTORY to understand what they're referring to and answer accordingly. Do NOT say "I don't have previous information" if the conversation history contains the answer.
+8. RIGHT BEFORE the disclaimer, add a line showing the data source from the context. Format it as: 📡 **Data Source:** [value of data_source from context]
+9. AT THE VERY END of your response, you MUST append this exact markdown text with empty lines before and after it:
    
    ---
    
