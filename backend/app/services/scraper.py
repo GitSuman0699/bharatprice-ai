@@ -27,7 +27,9 @@ class ScrapedProduct:
     weight: str          # e.g. "1 kg"
     weight_grams: int    # normalized weight in grams
     unit: str            # "g" or "ml"
-    price_per_kg: float  # normalized price per kg
+    normalized_price: float # price for 1kg, 1L, or 1pc
+    normalized_mrp: float # mrp for 1kg, 1L, or 1pc
+    normalized_unit: str # "kg", "L", or "pc"
     discount: str        # e.g. "28% OFF"
     category: str        # top-level category
     source: str          # "bigbasket"
@@ -41,6 +43,7 @@ class PriceResult:
     bigbasket_price: Optional[float] = None
     bigbasket_mrp: Optional[float] = None
     bigbasket_weight: str = ""
+    normalized_unit: str = "kg"
     bigbasket_discount: str = ""
     jiomart_price: Optional[float] = None    # estimated from BB
     local_market_price: Optional[float] = None  # estimated from BB
@@ -86,7 +89,7 @@ BB_CATEGORIES = {
     "turmeric": "whole-spices", "cumin": "whole-spices",
     "jeera": "whole-spices", "red_chilli": "whole-spices",
     # Oils
-    "mustard_oil": "mustard-oil", "coconut_oil": "coconut-oil",
+    "mustard_oil": "mustard-oil", "sunflower_oil": "sunflower-oil", "coconut_oil": "coconut-oil",
     # Dairy
     "milk": "milk", "ghee": "ghee", "butter": "butter-margarine",
     "curd": "curd", "paneer": "paneer-tofu",
@@ -117,7 +120,7 @@ BB_SEARCH_TERMS = {
     "chana_dal": "chana dal", "masoor_dal": "masoor dal",
     "turmeric": "turmeric powder", "cumin": "jeera",
     "jeera": "jeera", "red_chilli": "red chilli powder",
-    "mustard_oil": "mustard oil", "coconut_oil": "coconut oil",
+    "mustard_oil": "mustard oil", "sunflower_oil": "sunflower oil", "coconut_oil": "coconut oil",
     "milk": "milk", "ghee": "ghee", "butter": "butter",
     "curd": "curd", "paneer": "paneer",
     "egg": "eggs", "chicken": "chicken",
@@ -207,11 +210,25 @@ class BigBasketScraper:
             if not desc or sp <= 0:
                 return None
 
-            # Calculate price per kg (normalize to 1000g)
-            if magnitude > 0:
-                price_per_kg = (sp / magnitude) * 1000
+            # Normalize price for standard comparable unit (1kg, 1L, 1pc)
+            unit_lower = unit.lower()
+            if unit_lower in ["g", "kg"] and magnitude > 0:
+                normalized_price = (sp / magnitude) * 1000 if unit_lower == "g" else (sp / magnitude)
+                normalized_mrp = (mrp / magnitude) * 1000 if unit_lower == "g" else (mrp / magnitude)
+                normalized_unit = "kg"
+            elif unit_lower in ["ml", "l"] and magnitude > 0:
+                normalized_price = (sp / magnitude) * 1000 if unit_lower == "ml" else (sp / magnitude)
+                normalized_mrp = (mrp / magnitude) * 1000 if unit_lower == "ml" else (mrp / magnitude)
+                normalized_unit = "L"
+            elif magnitude > 0:
+                # Pieces, packs, bunches -> calculate price for 1 piece
+                normalized_price = (sp / magnitude)
+                normalized_mrp = (mrp / magnitude)
+                normalized_unit = "pc"
             else:
-                price_per_kg = sp  # assume 1kg if no weight info
+                normalized_price = sp
+                normalized_mrp = mrp
+                normalized_unit = "unit"
 
             # Category
             category = item.get("category", {}).get("tlc_name", "")
@@ -229,7 +246,9 @@ class BigBasketScraper:
                 weight=weight_str,
                 weight_grams=magnitude,
                 unit=unit,
-                price_per_kg=round(price_per_kg, 2),
+                normalized_price=round(normalized_price, 2),
+                normalized_mrp=round(normalized_mrp, 2),
+                normalized_unit=normalized_unit,
                 discount=d_text,
                 category=category,
                 source="bigbasket",
@@ -358,24 +377,25 @@ class BigBasketScraper:
         if not products:
             return None
 
-        # Find the cheapest per-kg price (prefer 1kg packs for fair comparison)
-        one_kg_products = [p for p in products if 900 <= p.weight_grams <= 1100]
+        # Find the cheapest normalized price (prefer standard pack sizes for fair comparison)
+        one_kg_products = [p for p in products if 900 <= p.weight_grams <= 1100 and p.normalized_unit in ["kg", "L"]]
         if one_kg_products:
             best = min(one_kg_products, key=lambda p: p.sp)
         else:
-            # Use per-kg normalized price
-            best = min(products, key=lambda p: p.price_per_kg)
+            # Use normalized price
+            best = min(products, key=lambda p: p.normalized_price)
 
         # Estimate JioMart and local market prices from BigBasket
-        bb_price_per_kg = best.price_per_kg
-        jiomart_est = round(bb_price_per_kg * 0.95, 2)    # JioMart typically 5% cheaper
-        local_market_est = round(bb_price_per_kg * 0.90, 2)  # local market ~10% cheaper
+        bb_norm_price = best.normalized_price
+        jiomart_est = round(bb_norm_price * 0.95, 2)    # JioMart typically 5% cheaper
+        local_market_est = round(bb_norm_price * 0.90, 2)  # local market ~10% cheaper
 
         return PriceResult(
             product_name=best.name,
-            bigbasket_price=best.price_per_kg,
-            bigbasket_mrp=best.mrp,
+            bigbasket_price=best.normalized_price,
+            bigbasket_mrp=best.normalized_mrp,
             bigbasket_weight=best.weight,
+            normalized_unit=best.normalized_unit,
             bigbasket_discount=best.discount,
             jiomart_price=jiomart_est,
             local_market_price=local_market_est,

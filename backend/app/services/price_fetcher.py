@@ -20,6 +20,7 @@ from app.data.product_mapping import (
     get_commodity_name,
     get_retail_markup,
     get_online_markup,
+    is_mandi_product,
     PRODUCT_TO_COMMODITY,
 )
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ def scrape_bigbasket_price(product_id: str) -> dict | None:
                 "source": "BigBasket",
                 "price": result.bigbasket_price,
                 "mrp": result.bigbasket_mrp or result.bigbasket_price,
-                "unit": "per kg",
+                "unit": f"per {result.normalized_unit}",
                 "weight": result.bigbasket_weight,
                 "discount": result.bigbasket_discount,
                 "is_scraped": True,
@@ -240,14 +241,35 @@ def get_real_price(
     bb_data = scrape_bigbasket_price(product_id)
 
     # Step 5: Calculate prices
-    if mandi_price_per_kg and mandi_price_per_kg > 0:
-        base_mandi = mandi_price_per_kg
-    else:
-        # Fallback: use a reasonable default (will be overridden by seed data in caller)
-        return None
-
     markup = get_retail_markup(product_id)
     online_markup = get_online_markup(product_id)
+    has_mandi = mandi_price_per_kg and mandi_price_per_kg > 0
+
+    if has_mandi:
+        base_mandi = mandi_price_per_kg
+    else:
+        # For non-mandi products (eggs, dairy, meat) or when API returns no data,
+        # use BigBasket price as the base, or fall back to a default estimate.
+        if bb_data:
+            # Derive a synthetic "wholesale" base from scraped retail
+            base_mandi = round(bb_data["price"] / markup, 2)
+        else:
+            # Use known default retail prices for non-mandi items (₹/kg or per unit)
+            _DEFAULT_RETAIL = {
+                "egg": 7.0, "chicken": 220.0, "fish": 300.0, "mutton": 700.0,
+                "milk": 56.0, "ghee": 550.0, "butter": 500.0, "curd": 55.0,
+                "paneer": 350.0, "coconut": 40.0, "jaggery": 60.0,
+                "tea": 400.0, "coffee": 800.0,
+                "mustard_oil": 180.0, "coconut_oil": 200.0,
+            }
+            default_retail = _DEFAULT_RETAIL.get(product_id)
+            if default_retail:
+                base_mandi = round(default_retail / markup, 2)
+            else:
+                # Truly unknown product with no data at all
+                return None
+        data_source = "Estimated (no mandi data)"
+        is_real = False
 
     # Use scraped prices if available, otherwise estimate from mandi
     if bb_data:
@@ -262,7 +284,7 @@ def get_real_price(
 
     # Sanity check: Retail prices cannot physically be lower than Mandi wholesale
     # (This happens when scrapers accidentally pull a 250g pack price)
-    if bigbasket_price <= base_mandi:
+    if has_mandi and bigbasket_price <= base_mandi:
         bigbasket_price = round(base_mandi * online_markup["bigbasket"], 2)
         jiomart_price = round(base_mandi * online_markup["jiomart"], 2)
         local_avg = round(base_mandi * markup, 2)
@@ -289,6 +311,13 @@ def get_real_price(
     else:
         demand_trend = "stable"
 
+    # Determine unit
+    final_unit = "/kg"
+    if bb_data and bb_data.get("unit"):
+        final_unit = bb_data["unit"]
+    elif product_id in ["egg", "coconut"]:
+        final_unit = "per pc"
+
     return {
         "product_id": product_id,
         "product_name": commodity,
@@ -304,7 +333,7 @@ def get_real_price(
         "jiomart_price": jiomart_price,
         "local_avg": local_avg,
         "recommended_retail": recommended_retail,
-        "unit": "/kg",
+        "unit": final_unit,
         "arrival_date": arrival_date,
         "market": market_name,
         "demand_trend": demand_trend,

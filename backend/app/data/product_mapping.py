@@ -80,6 +80,7 @@ PRODUCT_TO_COMMODITY = {
 
     # Oils & Others
     "mustard_oil": "Mustard Oil",
+    "sunflower_oil": "Sunflower Oil",
     "coconut_oil": "Coconut Oil",
     "coconut": "Coconut",
     "jaggery": "Jaggery(Gur)",
@@ -145,6 +146,7 @@ HINDI_ALIASES = {
     "दालचीनी": "cinnamon", "dalchini": "cinnamon",
     "लौंग": "clove", "laung": "clove",
     "सरसों का तेल": "mustard_oil", "sarson tel": "mustard_oil",
+    "refined oil": "sunflower_oil", "refine oil": "sunflower_oil", "sunflower oil": "sunflower_oil",
     "नारियल तेल": "coconut_oil", "nariyal tel": "coconut_oil",
     "गुड़": "jaggery", "gur": "jaggery", "gud": "jaggery",
     "चाय": "tea", "chai": "tea",
@@ -153,11 +155,13 @@ HINDI_ALIASES = {
     "मक्खन": "butter", "makhan": "butter",
     "दही": "curd", "dahi": "curd",
     "पनीर": "paneer",
-    "अंडा": "egg", "anda": "egg",
+    "अंडा": "egg", "anda": "egg", "eggs": "egg",
     "मुर्गा": "chicken", "murga": "chicken", "murgi": "chicken",
     "मछली": "fish", "machli": "fish", "machhi": "fish",
     "मटन": "mutton",
     "आटा": "atta", "aata": "atta",
+    # Common Plurals
+    "tomatoes": "tomato", "onions": "onion", "potatoes": "potato", "apples": "apple", "bananas": "banana", "carrots": "carrot"
 }
 
 # Retail markup factors: mandi wholesale → estimated retail
@@ -202,7 +206,7 @@ PRODUCT_CATEGORY = {
     "turmeric": "spices", "cumin": "spices", "jeera": "spices",
     "red_chilli": "spices", "black_pepper": "spices", "cardamom": "spices",
     "cinnamon": "spices", "clove": "spices", "ajwain": "spices", "methi": "spices",
-    "mustard_oil": "oils", "coconut_oil": "oils", "mustard": "oils",
+    "mustard_oil": "oils", "sunflower_oil": "oils", "coconut_oil": "oils", "mustard": "oils",
     "coconut": "others", "jaggery": "others", "tea": "others", "coffee": "others",
     "milk": "dairy", "ghee": "dairy", "butter": "dairy", "curd": "dairy", "paneer": "dairy",
     "egg": "eggs_meat", "chicken": "eggs_meat", "fish": "eggs_meat", "mutton": "eggs_meat",
@@ -247,6 +251,8 @@ def resolve_product_id(query: str) -> str | None:
     # Priority 3: Fallback loose substring match for aliases (if no spaces were used)
     for alias, pid in sorted(HINDI_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
         if alias in q:
+            if alias.isascii() and len(alias) <= 4:
+                continue
             return pid
 
     return None

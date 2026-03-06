@@ -36,7 +36,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Validate the key for all other routes
-        client_key = request.headers.get("X-API-Key", "")
+        # Starlette headers are case-insensitive
+        client_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key") or ""
         if client_key != settings.api_secret_key:
             return JSONResponse(
                 status_code=403,

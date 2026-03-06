@@ -196,13 +196,19 @@ def _get_bedrock_client():
             logger.warning(f"Could not init Bedrock client: {e}")
     return None
 
-async def generate_ai_response(message: str, data_context: dict, language: str = "en", chat_history: list = None) -> str:
+async def generate_ai_response(
+    message: str, 
+    data_context: dict, 
+    language: str = "en", 
+    chat_history: list = None,
+    intent: str = "general"
+) -> str:
     """Generate a dynamic response using Amazon Bedrock (Claude 3 Haiku) based on the scraped data context."""
     
     # If no data found AND no chat history, return standard fallback early.
     # But if there IS chat history, let the LLM use it to answer follow-up questions.
     if "error" in data_context and not chat_history:
-        return f"I'm sorry, I couldn't find exact pricing data for that. Please try asking about common staples like Tomato, Onion, Potato, Atta, or Rice."
+        return f"I'm sorry, I couldn't find exact pricing data for that. Please try asking about common items like Tomato, Onion, Potato, Atta, Rice, Egg, Chicken, Paneer, Dal, or Milk."
 
     client = _get_bedrock_client()
     if not client:
@@ -224,12 +230,16 @@ async def generate_ai_response(message: str, data_context: dict, language: str =
     }
     disclaimer_text = disclaimers.get(language, disclaimers["en"])
 
-    if chat_history:
+    # Determine if we should treat this as a short follow-up
+    # We only do this if there's chat history AND the user didn't explicitly trigger a main action intent.
+    is_short_followup = bool(chat_history) and intent in ["general", "unknown"]
+
+    if is_short_followup:
         prompt = f"""You are BharatPrice AI. The user is asking a follow-up question.
 Use the REAL-TIME MARKET DATA CONTEXT and the CONVERSATION HISTORY to directly answer their specific question.
 CRITICAL INSTRUCTIONS:
 1. {language_instruction}
-2. ONLY output the direct answer to their question. DO NOT add any greetings, disclaimers, or extra boilerplate text. DO NOT list all prices unless specifically asked.
+2. Keep the response short, concise, and understandable. DO NOT add any greetings or extra boilerplate text. ONLY output the direct answer to their question.
 3. Use the symbol ₹ for all currency values.
 
 REAL-TIME MARKET DATA CONTEXT:
@@ -244,18 +254,18 @@ Your job is to answer the user's specific question using the provided real-time 
 
 CRITICAL INSTRUCTIONS:
 1. {language_instruction}
-2. Directly answer what the user asked. If they asked for a comparison, focus on the comparison. If they asked for a price, give the price clearly.
-3. ALWAYS list ALL available prices from the context in your response using bullet points. This includes BigBasket price, JioMart price, Local Market Average, Mandi Wholesale Price (if available), and Recommended Selling Price. Never omit any price.
-4. Provide the 'Profit Margin Tip' if available.
-5. Embellish your response with proper formatting (bolding, bullet points) and relevant emojis to make it easy to read on a mobile phone.
-6. Use the symbol ₹ for all currency values.
-7. RIGHT BEFORE the disclaimer, add a line showing the data source from the context. Format it as: 📡 **Data Source:** [value of data_source from context]
-8. AT THE VERY END of your response, you MUST append this exact markdown text with empty lines before and after it:
+2. **Out of Domain Rule:** If the user asks an out-of-domain question (not related to grocery pricing, agriculture, kirana stores, or market data), politely apologize and state that you can only answer questions within your domain. Do NOT answer the question.
+3. **Missing Item Rule:** If the user forgot to mention an item, or misspelled it so badly that it cannot be understood (see if context_type is missing_item), explicitly ask them which item they want.
+4. **Detailed Comparison Rule:** If the user asks to compare prices, provide a detailed bulleted comparison. For mandi products, you MUST list: Mandi Price, Competitors (BigBasket/JioMart/Local), Price Recommendation, Profit Margin Tip, Data Sources, and Disclaimers.
+5. **Mandi Rates Rule:** If the user specifically asks for mandi prices, give a detailed answer focusing primarily on the wholesale mandi rates alongside the data source and the disclaimer.
+6. Embellish your response with proper formatting (bolding, bullet points) and relevant emojis to make it easy to read on a mobile phone.
+7. Use the symbol ₹ for all currency values.
+8. RIGHT BEFORE the disclaimer, add a line showing the data source from the context. Format it as: 📡 **Data Source:** [value of down_source from context]. If no context, omit.
+9. AT THE VERY END of your response (unless it is an Out of Domain rejection or Missing Item prompt), you MUST append this exact markdown text with empty lines before and after it:
    
    ---
    
    > {disclaimer_text}
-
 
 REAL-TIME MARKET DATA CONTEXT (Use this to answer):
 {json.dumps(data_context, indent=2)}
@@ -373,17 +383,27 @@ async def process_message(
         suggestions = ["Price of atta", "Tomato price trend", "Compare paneer prices"]
 
     elif intent == "price_check":
-        data_context = _fetch_price_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
+        if not product_id and message == product_name:
+            # User wants a price but we don't know what product
+            data_context = {"context_type": "missing_item", "instruction": "Ask the user to specify which item they want."}
+        else:
+            data_context = _fetch_price_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
         suggestions = [f"Compare {product_name} prices", f"Mandi rates for {product_name}", f"Price trend of {product_name}"]
 
     elif intent == "compare":
-        data_context = _fetch_comparison_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
-        data_context["data_source"] = "BigBasket Scraper + Mandi Data"
+        if not product_id and message == product_name:
+            data_context = {"context_type": "missing_item", "instruction": "Ask the user to specify which item they want to compare."}
+        else:
+            data_context = _fetch_comparison_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
+            data_context["data_source"] = "BigBasket Scraper + Mandi Data"
         suggestions = [f"Mandi rates for {product_name}", f"Price trend of {product_name}"]
 
     elif intent == "mandi":
-        data_context = _fetch_mandi_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
-        data_context["data_source"] = "data.gov.in (AGMARKNET)"
+        if not product_id and message == product_name:
+            data_context = {"context_type": "missing_item", "instruction": "Ask the user to specify which item's mandi rate they want."}
+        else:
+            data_context = _fetch_mandi_context(product_name, resolved_region, pincode=pincode, state=state, district=district)
+            data_context["data_source"] = "data.gov.in (AGMARKNET)"
         suggestions = [f"Price of {product_name}", f"Compare {product_name} prices"]
 
     elif intent == "trend":
@@ -419,11 +439,19 @@ async def process_message(
         }
         suggestions = [hi_suggestions.get(s, s) for s in suggestions]
 
-    # Generate the final natural language response using the LLM
-    final_reply = await generate_ai_response(message, data_context, language, chat_history)
+    # Generate the final natural language response
+    
+    # Generate human-like response
+    reply = await generate_ai_response(
+        message=message, 
+        data_context=data_context, 
+        language=language, 
+        chat_history=chat_history,
+        intent=intent
+    )
 
     return {
-        "reply": final_reply,
+        "reply": reply,
         "intent": intent,
         "language": language,
         "suggestions": suggestions,

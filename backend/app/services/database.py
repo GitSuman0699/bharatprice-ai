@@ -144,12 +144,12 @@ def get_current_price(product_query: str, region: str = "delhi", pincode: str | 
     logger.info(f"GPS PARAMS: state={state}, district={district}, pincode={pincode}, region={region}")
     final_data = None
     
-    if state and district:
-        real_data = get_real_price(product_query, pincode or "110001", state=state, district=district, city=district)
-        if real_data:
-            final_data = {
-                "product_name": real_data["product_name"],
-                "date": real_data.get("arrival_date", datetime.now().strftime("%d/%m/%Y")),
+    # Bypass GPS guard to allow nationwide fallback
+    real_data = get_real_price(product_query, pincode or "110001", state=state, district=district, city=district)
+    if real_data:
+        final_data = {
+            "product_name": real_data["product_name"],
+                "date": real_data.get("arrival_date") or datetime.now().strftime("%d/%m/%Y"),
                 "mandi_price": real_data["mandi_price"],
                 "bigbasket_price": real_data["bigbasket_price"],
                 "jiomart_price": real_data["jiomart_price"],
@@ -215,6 +215,8 @@ def get_competitor_prices(product_query: str, region: str = "delhi", pincode: st
 
     # Only include mandi price for products actually traded in mandis
     product_id = find_product_id(product_query)
+    
+    # If the product is traded in mandis and base_mandi actually has data
     if product_id and is_mandi_product(product_id) and price_data.mandi_price > 0:
         prices.append({
             "source": "🏪 Mandi (Wholesale)",
@@ -222,6 +224,7 @@ def get_competitor_prices(product_query: str, region: str = "delhi", pincode: st
             "is_real": True,
         })
 
+    # ALWAYS add the retail and algorithmic prices, regardless of mandi status
     prices.extend([
         {
             "source": "🛒 BigBasket",

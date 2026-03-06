@@ -30,7 +30,7 @@ PRODUCTS = {
     "oil_mustard_1l": {"name": "Mustard Oil", "category": "oils", "unit": "per litre", "base_price": 180},
     "oil_sunflower_1l": {"name": "Sunflower Oil", "category": "oils", "unit": "per litre", "base_price": 150},
     "oil_groundnut_1l": {"name": "Groundnut Oil", "category": "oils", "unit": "per litre", "base_price": 200},
-    "ghee_1kg": {"name": "Desi Ghee", "category": "oils", "unit": "per kg", "base_price": 550},
+    
 
     # Vegetables
     "tamatar_1kg": {"name": "Tamatar (Tomato)", "category": "vegetables", "unit": "per kg", "base_price": 40},
@@ -56,6 +56,13 @@ PRODUCTS = {
     "dahi_1kg": {"name": "Dahi (Curd)", "category": "dairy", "unit": "per kg", "base_price": 55},
     "paneer_1kg": {"name": "Paneer", "category": "dairy", "unit": "per kg", "base_price": 350},
     "butter_500g": {"name": "Butter", "category": "dairy", "unit": "per 500g", "base_price": 270},
+    "ghee_1kg": {"name": "Desi Ghee", "category": "dairy", "unit": "per kg", "base_price": 550},
+
+    # Eggs & Meat
+    "egg_10pcs": {"name": "Eggs", "category": "eggs_meat", "unit": "per 10 pcs", "base_price": 70},
+    "chicken_1kg": {"name": "Chicken", "category": "eggs_meat", "unit": "per kg", "base_price": 220},
+    "fish_1kg": {"name": "Fish", "category": "eggs_meat", "unit": "per kg", "base_price": 300},
+    "mutton_1kg": {"name": "Mutton", "category": "eggs_meat", "unit": "per kg", "base_price": 700},
 
     # Spices
     "haldi_100g": {"name": "Haldi (Turmeric)", "category": "spices", "unit": "per 100g", "base_price": 35},
@@ -117,6 +124,21 @@ REGIONS = {
         "city": "Lucknow",
         "mandis": ["Alambagh Mandi", "Dubagga Mandi"],
         "price_factor": 0.85,
+    },
+    "siliguri": {
+        "city": "Siliguri",
+        "mandis": ["Siliguri Regulated Market", "Bidhan Market"],
+        "price_factor": 0.90,
+    },
+    "guwahati": {
+        "city": "Guwahati",
+        "mandis": ["Fancy Bazaar", "Ganeshguri Market"],
+        "price_factor": 0.88,
+    },
+    "patna": {
+        "city": "Patna",
+        "mandis": ["Mithapur Mandi", "Kankarbagh Market"],
+        "price_factor": 0.84,
     },
 }
 
@@ -253,8 +275,9 @@ def find_product_id(query: str) -> str | None:
         "sooji": "sooji_1kg", "semolina": "sooji_1kg", "सूजी": "sooji_1kg",
         "poha": "poha_1kg", "पोहा": "poha_1kg",
         "mustard oil": "oil_mustard_1l", "sarson": "oil_mustard_1l", "सरसों": "oil_mustard_1l",
+        "refined oil": "oil_sunflower_1l", "refine oil": "oil_sunflower_1l", "sunflower oil": "oil_sunflower_1l",
         "sunflower": "oil_sunflower_1l", "oil": "oil_mustard_1l", "तेल": "oil_mustard_1l",
-        "groundnut": "oil_groundnut_1l",
+        "groundnut oil": "oil_groundnut_1l", "groundnut": "oil_groundnut_1l",
         "ghee": "ghee_1kg", "घी": "ghee_1kg",
         "tomato": "tamatar_1kg", "tamatar": "tamatar_1kg", "टमाटर": "tamatar_1kg",
         "onion": "pyaaz_1kg", "pyaaz": "pyaaz_1kg", "प्याज़": "pyaaz_1kg",
@@ -287,10 +310,26 @@ def find_product_id(query: str) -> str | None:
         "soap": "soap_lifebuoy", "साबुन": "soap_lifebuoy",
         "detergent": "detergent_1kg",
         "bread": "bread_400g", "ब्रेड": "bread_400g",
+        "egg": "egg_10pcs", "eggs": "egg_10pcs", "anda": "egg_10pcs", "अंडा": "egg_10pcs",
+        "chicken": "chicken_1kg", "murga": "chicken_1kg", "murgi": "chicken_1kg", "मुर्गा": "chicken_1kg",
+        "fish": "fish_1kg", "machli": "fish_1kg", "मछली": "fish_1kg",
+        "mutton": "mutton_1kg", "मटन": "mutton_1kg",
     }
 
+    query_clean = "".join(c if c.isalnum() or c.isspace() else " " for c in query_lower)
+    query_padded = f" {query_clean} "
+
+    # 1. Exact word boundary match
     for keyword, pid in keyword_map.items():
+        if f" {keyword} " in query_padded:
+            return pid
+
+    # 2. Loose substring match (for Devanagari/agglutinative text)
+    # Avoid matching short English substrings like "rice" in "prices" or "oil" in "boil"
+    for keyword, pid in sorted(keyword_map.items(), key=lambda x: len(x[0]), reverse=True):
         if keyword in query_lower:
+            if keyword.isascii() and len(keyword) <= 4:
+                continue
             return pid
 
     return None
