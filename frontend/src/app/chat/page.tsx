@@ -452,7 +452,7 @@ export default function ChatPage() {
         } catch {
             const errorMsg: Message = {
                 id: `error_${Date.now()}`,
-                text: "⚠️ Sorry, I encountered an error. Please try again or check if the backend server is running on port 8000.",
+                text: "⚠️ Sorry, I encountered an error. Please try again in a moment. If the issue persists, the service may be temporarily unavailable.",
                 sender: "bot",
                 timestamp: new Date(),
             };
