@@ -11,11 +11,11 @@ class Settings(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    cors_origins: str = "http://localhost:3000,http://localhost:5173"
+    cors_origins: str = "*"
 
     # Security
     api_secret_key: str = ""  # Static API key for /api/* routes (leave blank to disable)
-    allowed_hosts: str = "localhost"  # Comma-separated trusted hostnames
+    allowed_hosts: str = "*"  # Comma-separated trusted hostnames
 
     # data.gov.in API (AGMARKNET real mandi prices) — key must be in .env
     data_gov_api_key: str = ""
