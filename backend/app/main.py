@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from mangum import Mangum
 from app.config import get_settings
 from app.routes import chat, data, user
 from app.middleware.security import APIKeyMiddleware
@@ -71,6 +70,3 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
-
-# AWS Lambda Handler
-handler = Mangum(app)

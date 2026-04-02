@@ -5,17 +5,8 @@ from functools import lru_cache
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    # AWS
-    aws_region: str = "ap-south-1"
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-
-    # Amazon Bedrock
-    bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
-
-    # DynamoDB
-    dynamodb_users_table: str = "bharatprice-users"
-    dynamodb_prices_table: str = "bharatprice-prices"
+    # Groq API
+    groq_api_key: str = ""
 
     # API
     api_host: str = "0.0.0.0"

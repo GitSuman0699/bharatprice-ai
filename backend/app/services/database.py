@@ -6,13 +6,11 @@ Uses real data from data.gov.in API when available, falls back to seed data.
 import logging
 import os
 import json
+import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
-
-import boto3
-from botocore.exceptions import ClientError
 
 from app.data.seed_data import (
     generate_price_record,
@@ -29,77 +27,77 @@ from app.data.product_mapping import is_mandi_product
 logger = logging.getLogger(__name__)
 
 
-# ─── DynamoDB Configuration ──────────────────────────────────────
+# ─── SQLite Configuration ──────────────────────────────────────
 
-DYNAMODB_AVAILABLE = True
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "bharatprice.db")
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# Initialize tables
 try:
-    dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'ap-south-1'))
-    users_table = dynamodb.Table('BharatPriceUsers')
-    market_table = dynamodb.Table('BharatPriceMarketData')
+    with get_db() as conn:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                profile TEXT
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS market_data (
+                product_id TEXT,
+                region TEXT,
+                data TEXT,
+                expiration_time INTEGER,
+                PRIMARY KEY(product_id, region)
+            )
+        ''')
 except Exception as e:
-    logger.error(f"Failed to initialize DynamoDB: {e}")
-    DYNAMODB_AVAILABLE = False
+    logger.error(f"Failed to initialize SQLite: {e}")
 
 
 # ─── User Operations ──────────────────────────────────────────────
 
 def create_user(user_id: str, profile: dict) -> UserProfile | None:
-    """Create a new user profile in DynamoDB."""
-    if not DYNAMODB_AVAILABLE:
-        logger.error("DynamoDB not available.")
-        return None
-
-    item = {**profile, "user_id": user_id}
+    """Create a new user profile in SQLite."""
     try:
-        users_table.put_item(Item=item)
-        return UserProfile(**item)
-    except ClientError as e:
-        logger.error(f"Error creating user in DynamoDB: {e}")
+        with get_db() as conn:
+            conn.execute('INSERT OR REPLACE INTO users (user_id, profile) VALUES (?, ?)', (user_id, json.dumps(profile)))
+        return UserProfile(**{**profile, "user_id": user_id})
+    except Exception as e:
+        logger.error(f"Error creating user in SQLite: {e}")
         return None
 
 def get_user(user_id: str) -> UserProfile | None:
-    """Get user profile by ID from DynamoDB."""
-    if not DYNAMODB_AVAILABLE:
-        return None
-
+    """Get user profile by ID from SQLite."""
     try:
-        response = users_table.get_item(Key={'user_id': user_id})
-        item = response.get('Item')
-        if item:
-            return UserProfile(**item)
+        with get_db() as conn:
+            row = conn.execute('SELECT profile FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if row:
+                profile = json.loads(row['profile'])
+                return UserProfile(**{**profile, "user_id": user_id})
         return None
-    except ClientError as e:
-        logger.error(f"Error getting user from DynamoDB: {e}")
+    except Exception as e:
+        logger.error(f"Error getting user from SQLite: {e}")
         return None
 
 def update_user(user_id: str, updates: dict) -> UserProfile | None:
-    """Update user profile in DynamoDB."""
-    if not DYNAMODB_AVAILABLE:
+    """Update user profile in SQLite."""
+    user = get_user(user_id)
+    if not user:
         return None
-
+    
+    profile = user.model_dump()
+    profile.update(updates)
+    
     try:
-        # Construct update expression
-        update_expr = "set "
-        expr_attr_values = {}
-        expr_attr_names = {}
-        
-        for k, v in updates.items():
-            update_expr += f"#{k} = :{k}, "
-            expr_attr_values[f":{k}"] = v
-            expr_attr_names[f"#{k}"] = k
-            
-        update_expr = update_expr.rstrip(", ")
-
-        response = users_table.update_item(
-            Key={'user_id': user_id},
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_attr_values,
-            ExpressionAttributeNames=expr_attr_names,
-            ReturnValues="ALL_NEW"
-        )
-        return UserProfile(**response.get('Attributes', {}))
-    except ClientError as e:
-        logger.error(f"Error updating user in DynamoDB: {e}")
+        with get_db() as conn:
+            conn.execute('UPDATE users SET profile = ? WHERE user_id = ?', (json.dumps(profile), user_id))
+        return UserProfile(**profile)
+    except Exception as e:
+        logger.error(f"Error updating user in SQLite: {e}")
         return None
 
 
@@ -108,7 +106,7 @@ def update_user(user_id: str, updates: dict) -> UserProfile | None:
 def get_current_price(product_query: str, region: str = "delhi", pincode: str | None = None, state: str | None = None, district: str | None = None) -> PriceData | None:
     """
     Get today's price for a product.
-    Implemented with Cache-Aside Pattern using DynamoDB TTL.
+    Implemented with Cache-Aside Pattern using SQLite.
     """
     product_id = find_product_id(product_query)
     if not product_id:
@@ -117,27 +115,22 @@ def get_current_price(product_query: str, region: str = "delhi", pincode: str | 
     # Determine region key — use the custom city name sent from frontend (e.g. "Siliguri")
     cache_region = region
     
-    # 1. Check DynamoDB Cache
-    if DYNAMODB_AVAILABLE:
-        try:
-            response = market_table.get_item(Key={'product_id': product_id, 'region': cache_region})
-            item = response.get('Item')
+    # 1. Check SQLite Cache
+    try:
+        with get_db() as conn:
+            row = conn.execute('SELECT data, expiration_time FROM market_data WHERE product_id = ? AND region = ?', (product_id, cache_region)).fetchone()
             
-            # Cache Hit: Ensure it hasn't expired (DynamoDB TTL deletion is inexact)
-            if item and int(item.get('expiration_time', 0)) > int(datetime.now().timestamp()):
-                logger.info(f"CACHE HIT: Returning {product_id} in {cache_region} from DynamoDB.")
-                # We pop internal keys to match schema
-                item.pop('expiration_time', None)
-                item.pop('product_id', None)
-                item.pop('region', None)
-                
+            # Cache Hit: Ensure it hasn't expired
+            if row and row['expiration_time'] > int(datetime.now().timestamp()):
+                logger.info(f"CACHE HIT: Returning {product_id} in {cache_region} from SQLite.")
+                item = json.loads(row['data'])
                 return PriceData(
                     product_id=product_id,
                     region=cache_region,
                     **item
                 )
-        except ClientError as e:
-            logger.error(f"DynamoDB cache read failed: {e}")
+    except Exception as e:
+        logger.error(f"SQLite cache read failed: {e}")
 
     # 2. Cache Miss: Fetch Real Data
     logger.info(f"CACHE MISS: Fetching fresh data for {product_id} in {cache_region}...")
@@ -177,23 +170,15 @@ def get_current_price(product_query: str, region: str = "delhi", pincode: str | 
         }
 
     # 3. Write back to Cache (TTL exactly 24 hours from now)
-    if DYNAMODB_AVAILABLE and final_data:
+    if final_data:
         try:
             expiration_epoch = int((datetime.now() + timedelta(hours=24)).timestamp())
-            
-            # Serialize floats to Decimals for DynamoDB
-            import decimal
-            dynamo_item = json.loads(json.dumps(final_data), parse_float=decimal.Decimal)
-            
-            market_table.put_item(Item={
-                'product_id': product_id,
-                'region': cache_region,
-                'expiration_time': expiration_epoch,
-                **dynamo_item
-            })
-            logger.info(f"CACHE WRITE: Saved {product_id} in {cache_region} to DynamoDB (TTL 24h).")
+            with get_db() as conn:
+                conn.execute('INSERT OR REPLACE INTO market_data (product_id, region, data, expiration_time) VALUES (?, ?, ?, ?)', 
+                             (product_id, cache_region, json.dumps(final_data), expiration_epoch))
+            logger.info(f"CACHE WRITE: Saved {product_id} in {cache_region} to SQLite (TTL 24h).")
         except Exception as e:
-            logger.error(f"DynamoDB cache write failed: {e}")
+            logger.error(f"SQLite cache write failed: {e}")
 
     # Return structured Pydantic object
     return PriceData(
@@ -205,7 +190,7 @@ def get_current_price(product_query: str, region: str = "delhi", pincode: str | 
 
 def get_competitor_prices(product_query: str, region: str = "delhi", pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict | None:
     """Get competitor price comparison. Leverages the cached get_current_price architecture."""
-    # This automatically handles DynamoDB TTL caching and data.gov.in fetching
+    # This automatically handles SQLite caching and data.gov.in fetching
     price_data = get_current_price(product_query, region, pincode, state=state, district=district)
     
     if not price_data:
@@ -254,7 +239,7 @@ def get_competitor_prices(product_query: str, region: str = "delhi", pincode: st
         "unit": price_data.unit,
         "prices": prices,
         "demand_trend": price_data.demand_trend,
-        "data_source": "DynamoDB Cache / data.gov.in",
+        "data_source": "SQLite Cache / data.gov.in",
         "is_real_data": True,
     }
 

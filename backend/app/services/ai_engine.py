@@ -14,17 +14,14 @@ from app.services.database import (
 )
 from app.data.seed_data import find_product_id as find_pid, REGIONS
 from app.data.product_mapping import resolve_product_id, get_hindi_name, is_mandi_product
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from groq import AsyncGroq
 
 load_dotenv()
-
-BEDROCK_AVAILABLE = True
-
 
 # ─── Intent Classification ─────────────────────────────────────────
 
@@ -135,11 +132,14 @@ def _fetch_price_context(product_query: str, region: str, pincode: str | None = 
     }
 
     # Only include mandi data for products actually traded in mandis
-    if has_mandi and price_data.mandi_price > 0:
-        context["mandi_wholesale_price"] = price_data.mandi_price
-        context["profit_margin_tip"] = f"Buying at mandi rate ({price_data.mandi_price}) and selling at {price_data.recommended_retail} gives ~{((price_data.recommended_retail - price_data.mandi_price) / price_data.mandi_price * 100):.0f}% margin."
+    if has_mandi:
+        if price_data.mandi_price > 0:
+            context["mandi_wholesale_price"] = price_data.mandi_price
+            context["profit_margin_tip"] = f"Buying at mandi rate ({price_data.mandi_price}) and selling at {price_data.recommended_retail} gives ~{((price_data.recommended_retail - price_data.mandi_price) / price_data.mandi_price * 100):.0f}% margin."
+        else:
+            context["note"] = "Wholesale Mandi prices are currently unavailable due to data.gov.in server delays. Please rely on the provided Retail and Online competitive prices."
     else:
-        context["note"] = "This product is not traded in wholesale mandis. Prices are from retail/online sources."
+        context["note"] = "This product is not typically traded in wholesale agricultural mandis. Prices are aggregated from retail/online sources."
 
     return context
 
@@ -150,9 +150,15 @@ def _fetch_comparison_context(product_query: str, region: str, pincode: str | No
     return {"context_type": "competitor_comparison", "data": comparison}
 
 def _fetch_mandi_context(product_query: str, region: str, pincode: str | None = None, state: str | None = None, district: str | None = None) -> dict:
+    product_id = resolve_product_id(product_query)
+    has_mandi = product_id and is_mandi_product(product_id)
+    
     rates = get_mandi_rates(product_query, region, pincode=pincode, state=state, district=district)
     if not rates:
-        return {"error": f"No mandi rates for {product_query}"}
+        if has_mandi:
+            return {"context_type": "mandi_wholesale_rates", "data": [], "note": "Wholesale mandi prices are temporarily unavailable due to tracking server delays. Please check back later."}
+        else:
+            return {"context_type": "mandi_wholesale_rates", "data": [], "note": "This product is not traded in wholesale mandis."}
     
     rates_data = [{"market": r.mandi_name, "location": r.location, "price": r.price, "unit": r.unit} for r in rates]
     return {"context_type": "mandi_wholesale_rates", "data": rates_data}
@@ -183,18 +189,7 @@ def _fetch_forecast_context(product_query: str, region: str, pincode: str | None
     }
 
 
-# ─── LLM Generation (Bedrock) ────────────────────────────────
-
-def _get_bedrock_client():
-    if BEDROCK_AVAILABLE:
-        try:
-            return boto3.client(
-                service_name='bedrock-runtime',
-                region_name="ap-south-1"
-            )
-        except Exception as e:
-            logger.warning(f"Could not init Bedrock client: {e}")
-    return None
+# ─── LLM Generation (Groq) ────────────────────────────────
 
 async def generate_ai_response(
     message: str, 
@@ -203,18 +198,19 @@ async def generate_ai_response(
     chat_history: list = None,
     intent: str = "general"
 ) -> str:
-    """Generate a dynamic response using Amazon Bedrock (Claude 3 Haiku) based on the scraped data context."""
+    """Generate a dynamic response using Groq API based on the scraped data context."""
     
     # If no data found AND no chat history, return standard fallback early.
-    # But if there IS chat history, let the LLM use it to answer follow-up questions.
     if "error" in data_context and not chat_history:
         return f"I'm sorry, I couldn't find exact pricing data for that. Please try asking about common items like Tomato, Onion, Potato, Atta, Rice, Egg, Chicken, Paneer, Dal, or Milk."
 
-    client = _get_bedrock_client()
-    if not client:
-        # Fallback to a static string if no LLM is available
-        logger.error("LLM Client not available. Falling back to simple string dump.")
-        return f"Error connecting to AI. Here is the raw data: {json.dumps(data_context, indent=2)}"
+    settings = get_settings()
+    api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY")
+    if not api_key:
+        logger.error("Groq API key not found.")
+        return f"Warning: Groq API key is missing. Here is the raw data: {json.dumps(data_context, indent=2)}"
+
+    client = AsyncGroq(api_key=api_key)
 
     language_instruction = {
         "hi": "Respond entirely in Hindi (Devanagari script). Be very helpful and conversational like a friendly local advisor.",
@@ -230,8 +226,6 @@ async def generate_ai_response(
     }
     disclaimer_text = disclaimers.get(language, disclaimers["en"])
 
-    # Determine if we should treat this as a short follow-up
-    # We only do this if there's chat history AND the user didn't explicitly trigger a main action intent.
     is_short_followup = bool(chat_history) and intent in ["general", "unknown"]
 
     if is_short_followup:
@@ -274,54 +268,27 @@ USER QUESTION:
 "{message}"
 """
 
-    try:
-        # Build messages array with optional conversation history for context
-        messages = []
-        if chat_history:
-            messages.extend(chat_history)
-        messages.append({
-            "role": "user",
-            "content": prompt
-        })
+    messages = [
+        {"role": "system", "content": "You are BharatPrice AI, the ultimate data-driven pricing assistant for Kirana stores."}
+    ]
+    if chat_history:
+        messages.extend(chat_history)
+    messages.append({
+        "role": "user",
+        "content": prompt
+    })
 
-        body = json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 512,
-            "temperature": 0.3,
-            "system": "You are BharatPrice AI, the ultimate data-driven pricing assistant for Kirana stores.",
-            "messages": messages
-        })
-        
-        response = client.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0",
-            body=body
+    try:
+        completion = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=512,
         )
-        
-        response_body = json.loads(response.get("body").read())
-        return response_body.get("content")[0].get("text")
-        
-    except (ClientError, BotoCoreError) as e:
-        logger.error(f"Bedrock Claude call failed: {e}. Trying fallback model...")
-        
-        # Fallback to Amazon Titan if Claude access is not yet approved
-        try:
-            fallback_body = json.dumps({
-                "inputText": prompt,
-                "textGenerationConfig": {
-                    "maxTokenCount": 512,
-                    "temperature": 0.3,
-                }
-            })
-            fallback_response = client.invoke_model(
-                modelId="amazon.titan-text-lite-v1",
-                body=fallback_body
-            )
-            fallback_body_res = json.loads(fallback_response.get("body").read())
-            return fallback_body_res.get("results")[0].get("outputText")
-            
-        except (ClientError, BotoCoreError) as fallback_e:
-            logger.error(f"Bedrock Titan Fallback failed: {fallback_e}")
-            return f"Model access pending. Please approve Amazon Titan or Anthropic Claude in AWS Console. Status: {e}"
+        return completion.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Groq API call failed: {e}")
+        return "Model access issue or API error. Please check your Groq API key and connection."
 
 
 # ─── Main Chat Handler ─────────────────────────────────────────────

@@ -98,7 +98,7 @@ def fetch_mandi_prices(
         params["filters[district]"] = district
 
     try:
-        with httpx.Client(timeout=25) as client:
+        with httpx.Client(timeout=5) as client:
             response = client.get(DATA_GOV_API_URL, params=params)
             response.raise_for_status()
             data = response.json()
