@@ -1,4 +1,4 @@
-# 🏷️ BharatPrice AI
+# BharatPrice AI
 
 > AI-powered hyperlocal pricing intelligence for Kirana stores
 
@@ -6,16 +6,16 @@
 
 [![AI for Bharat Hackathon](https://img.shields.io/badge/AI%20for%20Bharat-Hackathon%202026-FF6B2C)](https://vision.hack2skill.com/event/ai-for-bharat)
 
-## 🎯 Problem Statement
+## Problem Statement
 Kirana store owners lack access to real-time competitive pricing data. They set prices based on gut feeling, leading to lost margins.
 
-## 💡 Solution
+## Solution
 BharatPrice AI is a conversational web-based AI assistant that helps kirana store owners:
 - **Get smart price recommendations** — AI-generated optimal selling prices based on live mandi rates.
 - **Compare competitor prices** — Compare your prices with online platforms like BigBasket, JioMart, etc. (if data is available for that region).
 - **Track mandi wholesale rates** — Find the current wholesale rates for commodities across India.
 
-## 🏗️ Architecture
+## Architecture
 
 ```text
 ┌─────────────────────────────────────────────────────┐
@@ -42,7 +42,7 @@ BharatPrice AI is a conversational web-based AI assistant that helps kirana stor
           └─────────────────┘
 ```
 
-## 🛠️ Tech Stack & Justifications
+## Tech Stack & Justifications
 
 ### Frontend — **Next.js 16 + TypeScript + Vanilla CSS**
 
@@ -82,7 +82,7 @@ BharatPrice AI is a conversational web-based AI assistant that helps kirana stor
 | **BigBasket Scraper (httpx)** | Provides real retail competitor prices via BigBasket's internal API. Scraped data is normalized to per-kg pricing. |
 | **Seed Data Fallback** | When live APIs fail (network issues, rate limiting), the app falls back to estimated prices based on historical patterns. |
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 bharatprice-ai/
@@ -115,5 +115,5 @@ bharatprice-ai/
 └── README.md
 ```
 
-## 📄 License
+## License
 MIT
